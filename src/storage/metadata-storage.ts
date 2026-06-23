@@ -55,6 +55,11 @@ export class MetadataStorage {
         data.notePaths = {};
       }
 
+      // 迁移：旧版本没有 lastSettings 字段，补上空对象
+      if (!data.lastSettings) {
+        data.lastSettings = {};
+      }
+
       // 验证格式
       if (this.isValidMetadata(data)) {
         return data;
@@ -96,7 +101,8 @@ export class MetadataStorage {
       lastSyncTime: 0,
       lastSyncMeta: {},
       notePaths: {},
-      version: "2.1.0",
+      lastSettings: {},
+      version: "2.2.0",
     };
   }
 

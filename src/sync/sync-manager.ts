@@ -118,6 +118,16 @@ export class SyncManager {
       const syncMetadata = await this.metadataStorage.load();
       console.debug(`[SyncManager] 本地元数据加载完成, 已有 ${Object.keys(syncMetadata.lastSyncMeta).length} 条记录`);
 
+      // 1.5 检测关键配置变化：organizeByTag / inlineAnnotations / vaultFolderPath / tagFolderRoot
+      // 任一变化都触发全量重同步（清空 lastSyncMeta），否则旧笔记会留在旧目录结构里
+      const settingsChanged = this.checkSettingsChanged(syncMetadata);
+      if (settingsChanged) {
+        console.debug("[SyncManager] 关键配置已变化，触发全量重同步");
+        notify?.("检测到笔记组织配置变化，执行全量重同步...");
+        syncMetadata.lastSyncMeta = {};
+        syncMetadata.notePaths = {};
+      }
+
       // 2. 列出云端所有文件元数据（快速，只拿 ETag/MTime，不下载内容）
       notify?.("扫描云端文件列表...");
       const cloudFiles = await this.cloudClient.listNotes();
@@ -128,11 +138,19 @@ export class SyncManager {
       console.debug(`[SyncManager] 增量对比: 需下载 ${toDownload.length}, 需删除 ${toDelete.length}, 未变化 ${unchanged}`);
 
       // 4. 处理云端删除的笔记
+      // 删除前先读文件 frontmatter 拿 parentId（如果是批注），
+      // 父笔记需要后续强制刷新，否则内联批注区会残留已删除的批注内容
+      const parentIdsToRefresh = new Set<string>();
       if (toDelete.length > 0) {
         notify?.(`处理云端删除 (${toDelete.length} 条)...`);
         for (const noteId of toDelete) {
           if (signal.aborted) throw new Error("同步已取消");
           try {
+            // 删除前先查这条笔记的 parent（如果是批注，需要刷新父笔记）
+            const parentInfo = await this.markdownWriter.findNoteParentId(noteId);
+            if (parentInfo?.parentId) {
+              parentIdsToRefresh.add(parentInfo.parentId);
+            }
             await this.markdownWriter.deleteNote(noteId);
             delete syncMetadata.lastSyncMeta[noteId];
             delete syncMetadata.notePaths[noteId];
@@ -203,6 +221,56 @@ export class SyncManager {
 
       console.debug(`[SyncManager] 解析完成: ${parsedNoteMap.size} 条有效笔记, ${parentAnnotationsMap.size} 个父笔记有批注`);
 
+      // 6.1 补救：父笔记被增量跳过时，强制下载（否则批注无法内联到父笔记）
+      // 两种场景：
+      //   a) 批注新增/修改 → 下载了，但父笔记 ETag 没变 → 没下载（#1）
+      //   b) 批注被删除 → 父笔记需要重写以移除批注区里的旧内容（#2）
+      const missingParentIds = new Set<string>();
+      // 场景 a：批注存在但父笔记没下载
+      for (const parentId of parentAnnotationsMap.keys()) {
+        if (!parsedNoteMap.has(parentId)) {
+          missingParentIds.add(parentId);
+        }
+      }
+      // 场景 b：批注被删除，父笔记需要刷新
+      for (const parentId of parentIdsToRefresh) {
+        if (!parsedNoteMap.has(parentId)) {
+          missingParentIds.add(parentId);
+        }
+      }
+      if (missingParentIds.size > 0) {
+        console.debug(`[SyncManager] 检测到 ${missingParentIds.size} 个父笔记需要强制刷新（批注变化或删除）`);
+        // 构建 noteId → cloudFile 的映射，快速查找路径
+        const cloudFileMap = new Map<string, CloudFileInfo>();
+        for (const cf of cloudFiles) {
+          cloudFileMap.set(cf.id, cf);
+        }
+        for (const parentId of missingParentIds) {
+          if (signal.aborted) throw new Error("同步已取消");
+          const cloudFile = cloudFileMap.get(parentId);
+          if (!cloudFile) {
+            // 父笔记在云端也不存在了（可能也被删除了），跳过
+            console.debug(`[SyncManager] 父笔记 ${parentId} 在云端不存在，跳过`);
+            continue;
+          }
+          try {
+            const atomicNote = await this.cloudClient.downloadAtomicNote(cloudFile.path);
+            if (atomicNote) {
+              const parsedNote = this.noteParser.parse(atomicNote);
+              if (!parsedNote.isRemoved) {
+                parsedNoteMap.set(parsedNote.noteId, parsedNote);
+                if (parsedNote.blockId) {
+                  blockIdNoteIdMap.set(parsedNote.blockId, parsedNote.noteId);
+                }
+                console.debug(`[SyncManager] 已补下载父笔记: ${parentId}`);
+              }
+            }
+          } catch (error) {
+            console.warn(`[SyncManager] 补下载父笔记失败: ${parentId}`, error);
+          }
+        }
+      }
+
       // 6.5 第二轮：写入笔记
       // 内联模式：批注不单独写文件，直接拼进父笔记
       // 非内联模式：批注单独写文件 + 父笔记嵌入引用（旧逻辑）
@@ -218,13 +286,8 @@ export class SyncManager {
           notify?.(`写入笔记 ${++writeIndex}/${parsedNoteMap.size}...`);
 
           // 内联模式：跳过批注笔记（它们会被拼进父笔记）
+          // 资源不在跳过时处理，而是在父笔记写入后统一处理，避免重复统计
           if (inlineMode && parsedNote.parentId) {
-            // 但仍要处理批注笔记的资源（图片等）
-            const assetStats = await this.assetHandler.handleAssets(parsedNote);
-            stats.totalAssets += assetStats.total;
-            stats.downloadedAssets += assetStats.downloaded;
-            stats.skippedAssets += assetStats.skipped;
-            stats.failedAssets += assetStats.failed;
             continue;
           }
 
@@ -337,6 +400,14 @@ export class SyncManager {
         syncMetadata.notePaths[noteId] = info.filePath;
       }
 
+      // 保存当前关键配置，下次同步时检测变化
+      syncMetadata.lastSettings = {
+        organizeByTag: this.settings.organizeByTag,
+        inlineAnnotations: this.settings.inlineAnnotations,
+        vaultFolderPath: this.settings.vaultFolderPath,
+        tagFolderRoot: this.settings.tagFolderRoot,
+      };
+
       syncMetadata.lastSyncTime = Date.now();
       await this.metadataStorage.save(syncMetadata);
 
@@ -361,6 +432,22 @@ export class SyncManager {
     stats.endTime = Date.now();
     this.abortController = null;
     return stats;
+  }
+
+  /**
+   * 检测关键配置是否变化（organizeByTag / inlineAnnotations / vaultFolderPath / tagFolderRoot）
+   * 变化时需要全量重同步，否则旧笔记会留在旧目录结构里
+   */
+  private checkSettingsChanged(metadata: SyncMetadata): boolean {
+    const last = metadata.lastSettings;
+    if (!last) return false; // 首次同步或旧版本元数据，不算变化
+
+    if (last.organizeByTag !== this.settings.organizeByTag) return true;
+    if (last.inlineAnnotations !== this.settings.inlineAnnotations) return true;
+    if (last.vaultFolderPath !== this.settings.vaultFolderPath) return true;
+    if (last.tagFolderRoot !== this.settings.tagFolderRoot) return true;
+
+    return false;
   }
 
   /**

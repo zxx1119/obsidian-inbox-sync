@@ -160,6 +160,11 @@ export class MarkdownWriter {
     lines.push(`created: ${note.createdAt.toISOString()}`);
     lines.push(`updated: ${note.updatedAt.toISOString()}`);
 
+    // 父笔记 noteId（批注笔记，用于删除时反查父笔记以触发刷新）
+    if (note.parentId) {
+      lines.push(`parent_id: ${note.parentId}`);
+    }
+
     // 标签
     if (note.tags.length > 0 && this.settings.enableFrontmatterTags) {
       lines.push("tags:");
@@ -284,7 +289,9 @@ export class MarkdownWriter {
     }
 
     // 主标签 = 第一个标签
-    const primaryTag = note.tags[0];
+    // 统一转小写做目录映射，避免 #Diary 和 #diary 建两个目录
+    // （文件系统大小写敏感，但 Obsidian 标签系统大小写不敏感）
+    const primaryTag = note.tags[0].toLowerCase();
 
     // 标签可能含 / 分隔的层级，转成路径
     // 清理非法路径字符
@@ -359,9 +366,11 @@ export class MarkdownWriter {
 
   /**
    * 递归扫描文件夹查找并删除指定 noteId 的笔记
+   * 删除后清理空的父目录（递归向上，直到根目录或非空目录）
    */
   private async deleteNoteInFolder(folderPath: string, noteId: string): Promise<boolean> {
     const vault = this.app.vault;
+    const basePath = this.getBasePath();
 
     try {
       const entry = vault.getAbstractFileByPath(folderPath);
@@ -374,8 +383,13 @@ export class MarkdownWriter {
             const content = await vault.read(child);
             const match = content.match(/inbox_id:\s*(\S+)/);
             if (match && match[1] === noteId) {
+              const deletedFilePath = child.path;
               await vault.delete(child);
-              console.debug(`[MarkdownWriter] 已删除笔记: ${child.path}`);
+              console.debug(`[MarkdownWriter] 已删除笔记: ${deletedFilePath}`);
+
+              // 清理空的父目录（递归向上，直到根目录或非空目录）
+              await this.cleanupEmptyParentDirs(deletedFilePath, basePath);
+
               return true;
             }
           } catch {
@@ -392,6 +406,40 @@ export class MarkdownWriter {
     }
 
     return false;
+  }
+
+  /**
+   * 清理空的父目录（递归向上，直到根目录或非空目录）
+   * @param deletedFilePath 被删除文件的路径
+   * @param basePath 根目录，清理到此为止
+   */
+  private async cleanupEmptyParentDirs(deletedFilePath: string, basePath: string): Promise<void> {
+    const vault = this.app.vault;
+    const normalizedBase = basePath.replace(/^\/+|\/+$/g, "");
+
+    // 从被删除文件的父目录开始向上检查
+    let current = deletedFilePath.substring(0, deletedFilePath.lastIndexOf("/"));
+
+    while (current && current !== normalizedBase && current.length > normalizedBase.length) {
+      try {
+        const entry = vault.getAbstractFileByPath(current);
+        if (!(entry instanceof TFolder)) break;
+
+        // 目录非空就停止
+        if (entry.children.length > 0) break;
+
+        // 空目录，删除
+        await vault.delete(entry);
+        console.debug(`[MarkdownWriter] 已清理空目录: ${current}`);
+
+        // 继续向上检查
+        const parent = current.substring(0, current.lastIndexOf("/"));
+        if (parent === current) break; // 已经到根
+        current = parent;
+      } catch {
+        break;
+      }
+    }
   }
 
   /**
@@ -524,6 +572,31 @@ export class MarkdownWriter {
     if (!filePath) return null;
     const fileName = filePath.split("/").pop() || "";
     return fileName.replace(/\.md$/, "");
+  }
+
+  /**
+   * 通过 noteId 查找笔记的 parent noteId（从 frontmatter 的 parent_id 字段读取）
+   * 用于删除批注前确认其父笔记，以便后续刷新父笔记的内联批注区
+   * @returns noteId 和 parentId（如果有的话），找不到返回 null
+   */
+  async findNoteParentId(noteId: string): Promise<{ noteId: string; parentId: string } | null> {
+    const vault = this.app.vault;
+    const filePath = await this.findNotePath(noteId);
+    if (!filePath) return null;
+
+    try {
+      const file = vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) return null;
+      const content = await vault.read(file);
+      const parentIdMatch = content.match(/parent_id:\s*(\S+)/);
+      if (parentIdMatch) {
+        return { noteId, parentId: parentIdMatch[1] };
+      }
+    } catch {
+      // 忽略
+    }
+
+    return null;
   }
 
   /**
