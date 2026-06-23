@@ -50,6 +50,11 @@ export class MetadataStorage {
         console.debug("[MetadataStorage] 迁移旧格式元数据完成");
       }
 
+      // 迁移：旧版本没有 notePaths 字段，补上空对象
+      if (!data.notePaths) {
+        data.notePaths = {};
+      }
+
       // 验证格式
       if (this.isValidMetadata(data)) {
         return data;
@@ -90,7 +95,8 @@ export class MetadataStorage {
     return {
       lastSyncTime: 0,
       lastSyncMeta: {},
-      version: "2.0.0",
+      notePaths: {},
+      version: "2.1.0",
     };
   }
 
@@ -106,6 +112,7 @@ export class MetadataStorage {
       typeof metadata.lastSyncTime === "number" &&
       typeof metadata.lastSyncMeta === "object" &&
       typeof metadata.version === "string"
+      // notePaths 可选（旧版本没有，load 时已补上）
     );
   }
 

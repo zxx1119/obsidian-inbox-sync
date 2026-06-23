@@ -37,12 +37,21 @@ export class MarkdownWriter {
 
   /**
    * 写入笔记到 Vault
+   *
+   * 路径变化处理：
+   * - 如果 organizeByTag 开启，笔记标签变了会导致目标目录变化
+   * - 调用方传入 oldFilePath（上次同步记录的路径）
+   * - 若 oldFilePath 存在且与新路径不同，先删除旧文件（相当于 move）
+   * - 同 noteId 的同名文件直接覆盖
+   *
    * @param note 笔记数据
+   * @param oldFilePath 上次同步时该笔记的文件路径（用于检测路径变化，可选）
    * @param parentFileName 父笔记文件名（批注笔记用，仅 inlineAnnotations=false 时生效）
    * @param annotations 批注列表（父笔记用，仅 inlineAnnotations=true 时生效）
    */
   async writeNote(
     note: ParsedNote,
+    oldFilePath?: string,
     parentFileName?: string,
     annotations?: ParsedNote[]
   ): Promise<WriteNoteResult> {
@@ -71,6 +80,25 @@ export class MarkdownWriter {
         }
       } catch {
         // 忽略读取错误
+      }
+    }
+
+    // 路径变化处理：旧路径存在且与新路径不同，删除旧文件
+    // 场景：用户改了标签，主标签变了，笔记要从 旧标签目录/ 移到 新标签目录/
+    if (oldFilePath && oldFilePath !== filePath) {
+      const oldFile = vault.getAbstractFileByPath(oldFilePath);
+      if (oldFile instanceof TFile) {
+        try {
+          // 再次确认旧文件确实是同一条笔记（避免误删）
+          const oldContent = await vault.read(oldFile);
+          const idMatch = oldContent.match(/inbox_id:\s*(\S+)/);
+          if (idMatch && idMatch[1] === note.noteId) {
+            await vault.delete(oldFile);
+            console.debug(`[MarkdownWriter] 路径变化，已删除旧文件: ${oldFilePath} → ${filePath}`);
+          }
+        } catch (error) {
+          console.warn(`[MarkdownWriter] 删除旧路径文件失败: ${oldFilePath}`, error);
+        }
       }
     }
 

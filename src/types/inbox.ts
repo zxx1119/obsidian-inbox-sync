@@ -189,6 +189,7 @@ export interface NoteSyncMeta {
 export interface SyncMetadata {
   lastSyncTime: number;     // 最后同步时间（毫秒）
   lastSyncMeta: Record<string, NoteSyncMeta>;  // noteId -> {etag, mtime}
+  notePaths: Record<string, string>;  // noteId -> vault 内的文件路径（含目录和扩展名），用于检测路径变化做 move
   version: string;          // 元数据格式版本
 }
 

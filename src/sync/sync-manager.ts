@@ -135,6 +135,7 @@ export class SyncManager {
           try {
             await this.markdownWriter.deleteNote(noteId);
             delete syncMetadata.lastSyncMeta[noteId];
+            delete syncMetadata.notePaths[noteId];
             stats.deletedNotes++;
           } catch (error) {
             console.warn(`[SyncManager] 删除笔记失败: ${noteId}`, error);
@@ -175,6 +176,7 @@ export class SyncManager {
             await this.markdownWriter.deleteNote(parsedNote.noteId);
             stats.deletedNotes++;
             delete syncMetadata.lastSyncMeta[noteId];
+            delete syncMetadata.notePaths[noteId];
             continue;
           }
 
@@ -232,7 +234,10 @@ export class SyncManager {
             annotations = parentAnnotationsMap.get(noteId);
           }
 
-          const result = await this.markdownWriter.writeNote(parsedNote, undefined, annotations);
+          // 查上次同步记录的路径，用于检测路径变化（标签改了→目录变了→move）
+          const oldFilePath = syncMetadata.notePaths[noteId];
+
+          const result = await this.markdownWriter.writeNote(parsedNote, oldFilePath, undefined, annotations);
 
           noteIdFileMap.set(noteId, { fileName: result.fileName, filePath: result.filePath });
 
@@ -325,6 +330,13 @@ export class SyncManager {
           mtime: file.mtime || 0,
         };
       }
+
+      // 更新 notePaths：记录每条笔记当前在 vault 中的路径，下次同步时用于检测路径变化
+      // 只记录本次实际写入的笔记（跳过的笔记保留旧路径记录不动）
+      for (const [noteId, info] of noteIdFileMap) {
+        syncMetadata.notePaths[noteId] = info.filePath;
+      }
+
       syncMetadata.lastSyncTime = Date.now();
       await this.metadataStorage.save(syncMetadata);
 
