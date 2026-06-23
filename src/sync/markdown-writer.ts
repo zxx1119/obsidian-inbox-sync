@@ -1,18 +1,30 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, TFolder } from "obsidian";
 import { InboxSyncSettings } from "../types/settings";
 import { ParsedNote } from "../types/inbox";
 
 /** 批注嵌入块的标记，用于识别和替换 */
-const ANNOTATION_BLOCK_START = "\n\n---\n\n> **批注**\n";
+const ANNOTATION_BLOCK_START = "\n\n---\n\n## 批注\n";
+
+/** 内联批注的单条标记，用于识别和替换 */
+const ANNOTATION_INLINE_START = "\n\n---\n\n## 批注\n";
 
 /** writeNote 的返回结果 */
 export interface WriteNoteResult {
   isNew: boolean;
-  fileName: string;  // 不含扩展名的文件名，供嵌入引用用
+  fileName: string;       // 不含扩展名的文件名，供嵌入引用用
+  filePath: string;       // 完整路径（含目录和扩展名）
 }
 
 /**
  * Markdown 写入器
+ *
+ * 组织方式（受 settings 控制）：
+ * 1. organizeByTag=true：按主标签分文件夹
+ *    - inBox/日记/生活/note.md
+ *    - 无标签笔记留在根目录 inBox/note.md
+ * 2. inlineAnnotations=true：批注内联到父笔记
+ *    - 父笔记末尾追加 "## 批注" 区块，每条批注带时间戳和正文
+ *    - 不再为批注生成独立 .md 文件
  */
 export class MarkdownWriter {
   private app: App;
@@ -25,15 +37,20 @@ export class MarkdownWriter {
 
   /**
    * 写入笔记到 Vault
-   * 所有笔记平铺在 inBox/ 目录下
-   * @returns WriteNoteResult 包含是否新建和文件名
+   * @param note 笔记数据
+   * @param parentFileName 父笔记文件名（批注笔记用，仅 inlineAnnotations=false 时生效）
+   * @param annotations 批注列表（父笔记用，仅 inlineAnnotations=true 时生效）
    */
-  async writeNote(note: ParsedNote, parentFileName?: string): Promise<WriteNoteResult> {
+  async writeNote(
+    note: ParsedNote,
+    parentFileName?: string,
+    annotations?: ParsedNote[]
+  ): Promise<WriteNoteResult> {
     const vault = this.app.vault;
-    const folderPath = this.getBasePath();
+    const folderPath = this.getNoteFolderPath(note);
 
-    // 确保文件夹存在
-    await vault.adapter.mkdir(folderPath);
+    // 确保文件夹存在（递归创建）
+    await this.ensureFolder(folderPath);
 
     // 确定标题
     const displayTitle = this.getDisplayTitle(note);
@@ -58,7 +75,7 @@ export class MarkdownWriter {
     }
 
     // 生成 Markdown 内容
-    const markdown = this.generateMarkdown(note, displayTitle, parentFileName);
+    const markdown = this.generateMarkdown(note, displayTitle, parentFileName, annotations);
 
     // 检查文件是否存在
     const finalExisting = vault.getAbstractFileByPath(filePath);
@@ -66,11 +83,11 @@ export class MarkdownWriter {
     if (finalExisting instanceof TFile) {
       // 文件存在，更新内容
       await vault.modify(finalExisting, markdown);
-      return { isNew: false, fileName };
+      return { isNew: false, fileName, filePath };
     } else {
       // 文件不存在，创建新文件
       await vault.create(filePath, markdown);
-      return { isNew: true, fileName };
+      return { isNew: true, fileName, filePath };
     }
   }
 
@@ -98,8 +115,14 @@ export class MarkdownWriter {
 
   /**
    * 生成 Markdown 内容
+   * @param annotations 批注列表（父笔记用，内联模式）
    */
-  private generateMarkdown(note: ParsedNote, displayTitle: string, parentFileName?: string): string {
+  private generateMarkdown(
+    note: ParsedNote,
+    displayTitle: string,
+    parentFileName?: string,
+    annotations?: ParsedNote[]
+  ): string {
     const lines: string[] = [];
 
     // Frontmatter
@@ -118,7 +141,7 @@ export class MarkdownWriter {
       }
     }
 
-    // 父笔记引用（批注笔记）
+    // 父笔记引用（批注笔记，仅非内联模式）
     if (parentFileName) {
       lines.push(`parent: "[[${parentFileName}]]"`);
     }
@@ -129,7 +152,54 @@ export class MarkdownWriter {
     // 正文内容
     lines.push(this.processContent(note));
 
+    // 内联批注区块（父笔记）
+    if (this.settings.inlineAnnotations && annotations && annotations.length > 0) {
+      lines.push(this.buildAnnotationBlock(annotations));
+    }
+
     return lines.join("\n");
+  }
+
+  /**
+   * 构建内联批注区块
+   * 每条批注：带时间戳标题 + 正文内容
+   */
+  private buildAnnotationBlock(annotations: ParsedNote[]): string {
+    // 按创建时间升序排列
+    const sorted = [...annotations].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+    );
+
+    const lines: string[] = [ANNOTATION_INLINE_START];
+
+    for (const ann of sorted) {
+      const timeStr = this.formatAnnotationTime(ann.createdAt.getTime());
+      const annTitle = ann.title && ann.title !== "Untitled" ? ann.title : "批注";
+
+      lines.push(`### ${annTitle}`);
+      lines.push(`> _${timeStr}_`);
+      lines.push("");
+
+      // 批注正文
+      const content = ann.content.trim();
+      if (content) {
+        lines.push(content);
+      }
+
+      // 批注里的图片等资源引用（已在 content 中，这里不额外处理）
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }
+
+  /**
+   * 格式化批注时间 "2026-04-14 20:48"
+   */
+  private formatAnnotationTime(timestamp: number): string {
+    const d = new Date(timestamp);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   /**
@@ -160,10 +230,74 @@ export class MarkdownWriter {
   }
 
   /**
-   * 获取基础路径（扁平结构）
+   * 获取根路径（扁平结构时的基础路径）
    */
   private getBasePath(): string {
     return this.settings.vaultFolderPath.replace(/^\/+|\/+$/g, "");
+  }
+
+  /**
+   * 根据笔记的标签确定它应该存放的文件夹路径
+   * - organizeByTag=false：返回根目录
+   * - organizeByTag=true：返回 inBox/标签名/（用主标签，即第一个标签）
+   *   - 支持嵌套标签 tag/subtag → inBox/tag/subtag/
+   *   - 无标签 → 根目录
+   *   - tagFolderRoot 非空时，标签目录建在 tagFolderRoot 下
+   */
+  getNoteFolderPath(note: ParsedNote): string {
+    const basePath = this.getBasePath();
+
+    if (!this.settings.organizeByTag) {
+      return basePath;
+    }
+
+    if (!note.tags || note.tags.length === 0) {
+      return basePath;
+    }
+
+    // 主标签 = 第一个标签
+    const primaryTag = note.tags[0];
+
+    // 标签可能含 / 分隔的层级，转成路径
+    // 清理非法路径字符
+    const tagPath = primaryTag
+      .split("/")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => s.replace(/[<>:"/\\|?*]/g, "-"))
+      .join("/");
+
+    if (!tagPath) {
+      return basePath;
+    }
+
+    // tagFolderRoot 非空时，标签目录建在其下
+    if (this.settings.tagFolderRoot) {
+      const root = this.settings.tagFolderRoot.replace(/^\/+|\/+$/g, "");
+      return `${basePath}/${root}/${tagPath}`;
+    }
+
+    return `${basePath}/${tagPath}`;
+  }
+
+  /**
+   * 递归创建文件夹
+   */
+  private async ensureFolder(folderPath: string): Promise<void> {
+    const vault = this.app.vault;
+    const parts = folderPath.split("/").filter((p) => p.length > 0);
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      try {
+        const entry = vault.getAbstractFileByPath(current);
+        if (!entry) {
+          await vault.createFolder(current);
+        }
+      } catch {
+        // 文件夹可能已存在，忽略
+      }
+    }
   }
 
   /**
@@ -179,30 +313,15 @@ export class MarkdownWriter {
 
   /**
    * 删除笔记（通过 noteId 查找并删除）
-   * 笔记平铺在 inBox/ 目录，直接扫描该目录下的 .md 文件
+   * 扫描根目录及所有子目录下的 .md 文件
    */
   async deleteNote(noteId: string): Promise<boolean> {
     const vault = this.app.vault;
     const basePath = this.getBasePath();
 
     try {
-      const files = await vault.adapter.list(basePath);
-
-      for (const filePath of files.files) {
-        if (!filePath.endsWith(".md")) continue;
-
-        try {
-          const content = await vault.adapter.read(filePath);
-          const match = content.match(/inbox_id:\s*(\S+)/);
-          if (match && match[1] === noteId) {
-            await vault.adapter.remove(filePath);
-            console.debug(`[MarkdownWriter] 已删除笔记: ${filePath}`);
-            return true;
-          }
-        } catch {
-          // 忽略读取错误
-        }
-      }
+      const deleted = await this.deleteNoteInFolder(basePath, noteId);
+      if (deleted) return true;
     } catch {
       // 文件夹可能不存在
     }
@@ -211,7 +330,45 @@ export class MarkdownWriter {
   }
 
   /**
+   * 递归扫描文件夹查找并删除指定 noteId 的笔记
+   */
+  private async deleteNoteInFolder(folderPath: string, noteId: string): Promise<boolean> {
+    const vault = this.app.vault;
+
+    try {
+      const entry = vault.getAbstractFileByPath(folderPath);
+      if (!(entry instanceof TFolder)) return false;
+
+      for (const child of entry.children) {
+        if (child instanceof TFile) {
+          if (!child.path.endsWith(".md")) continue;
+          try {
+            const content = await vault.read(child);
+            const match = content.match(/inbox_id:\s*(\S+)/);
+            if (match && match[1] === noteId) {
+              await vault.delete(child);
+              console.debug(`[MarkdownWriter] 已删除笔记: ${child.path}`);
+              return true;
+            }
+          } catch {
+            // 忽略读取错误
+          }
+        } else if (child instanceof TFolder) {
+          // 递归子目录
+          const found = await this.deleteNoteInFolder(child.path, noteId);
+          if (found) return true;
+        }
+      }
+    } catch {
+      // 忽略
+    }
+
+    return false;
+  }
+
+  /**
    * 更新父笔记，追加子笔记的嵌入引用
+   * 仅在 inlineAnnotations=false 时使用（保留旧的行为）
    * @param parentNoteId 父笔记的 noteId
    * @param childFileNames 子笔记的文件名列表（不含扩展名）
    */
@@ -258,7 +415,7 @@ export class MarkdownWriter {
 
   /**
    * 给子笔记的 frontmatter 补上 parent 引用
-   * 在现有的 frontmatter 中（---之前）插入 parent 字段
+   * 仅在 inlineAnnotations=false 时使用
    */
   async addChildParentRef(childFileName: string, parentFileName: string): Promise<void> {
     const vault = this.app.vault;
@@ -287,28 +444,45 @@ export class MarkdownWriter {
   }
 
   /**
-   * 通过 noteId 查找笔记的文件路径
+   * 通过 noteId 查找笔记的文件路径（递归扫描所有子目录）
    */
-  private async findNotePath(noteId: string): Promise<string | null> {
+  async findNotePath(noteId: string): Promise<string | null> {
     const vault = this.app.vault;
     const basePath = this.getBasePath();
 
+    const result = await this.findNotePathInFolder(basePath, noteId);
+    return result;
+  }
+
+  /**
+   * 递归在文件夹中查找指定 noteId 的笔记路径
+   */
+  private async findNotePathInFolder(folderPath: string, noteId: string): Promise<string | null> {
+    const vault = this.app.vault;
+
     try {
-      const files = await vault.adapter.list(basePath);
-      for (const filePath of files.files) {
-        if (!filePath.endsWith(".md")) continue;
-        try {
-          const content = await vault.adapter.read(filePath);
-          const match = content.match(/inbox_id:\s*(\S+)/);
-          if (match && match[1] === noteId) {
-            return filePath;
+      const entry = vault.getAbstractFileByPath(folderPath);
+      if (!(entry instanceof TFolder)) return null;
+
+      for (const child of entry.children) {
+        if (child instanceof TFile) {
+          if (!child.path.endsWith(".md")) continue;
+          try {
+            const content = await vault.read(child);
+            const match = content.match(/inbox_id:\s*(\S+)/);
+            if (match && match[1] === noteId) {
+              return child.path;
+            }
+          } catch {
+            // 忽略
           }
-        } catch {
-          // 忽略
+        } else if (child instanceof TFolder) {
+          const found = await this.findNotePathInFolder(child.path, noteId);
+          if (found) return found;
         }
       }
     } catch {
-      // 文件夹可能不存在
+      // 忽略
     }
 
     return null;
@@ -329,15 +503,15 @@ export class MarkdownWriter {
    * - [[note-xxx]] → [[文件名]]
    * - [[Card123]]  → [[文件名]]
    * - [[标题]]     → 保持不变
+   *
+   * @param filePath 笔记的完整路径
    */
   async convertLinks(
-    fileName: string,
+    filePath: string,
     noteIdFileMap: Map<string, string>,
     blockIdFileMap: Map<number, string>
   ): Promise<void> {
     const vault = this.app.vault;
-    const basePath = this.getBasePath();
-    const filePath = `${basePath}/${fileName}.md`;
 
     try {
       const file = vault.getAbstractFileByPath(filePath);
@@ -370,7 +544,7 @@ export class MarkdownWriter {
 
       if (modified) {
         await vault.modify(file, content);
-        console.debug(`[MarkdownWriter] 已转换链接: ${fileName}`);
+        console.debug(`[MarkdownWriter] 已转换链接: ${filePath}`);
       }
     } catch (error) {
       console.error(`[MarkdownWriter] 转换链接失败: ${filePath}`, error);

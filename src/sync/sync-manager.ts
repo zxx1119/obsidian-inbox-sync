@@ -153,20 +153,20 @@ export class SyncManager {
 
       console.debug(`[SyncManager] 云端笔记收集完成, 变化 ${allNotes.size} 条, 跳过 ${unchanged} 条`);
 
-      // 6. 第一轮：解析 + 写入所有笔记（不含 parent 信息）
+      // 6. 第一轮：解析所有笔记，建立索引
       let processedCount = 0;
-      // 收集父子关系：parentId -> childFileNames[]
-      const parentChildMap = new Map<string, string[]>();
-      // 内存索引：noteId -> { fileName, parsedNote }
-      const noteIdFileMap = new Map<string, { fileName: string; parsedNote: ParsedNote }>();
-      // blockId → fileName 映射（给 Card 格式链接转换用）
-      const blockIdFileMap = new Map<number, string>();
+      // 父子关系：parentId -> ParsedNote[]（批注笔记列表）
+      const parentAnnotationsMap = new Map<string, ParsedNote[]>();
+      // 所有有效（未删除）的笔记：noteId -> ParsedNote
+      const parsedNoteMap = new Map<string, ParsedNote>();
+      // blockId → noteId 映射（给 Card 格式链接转换用）
+      const blockIdNoteIdMap = new Map<number, string>();
 
       for (const [noteId, atomicNote] of allNotes) {
         if (signal.aborted) throw new Error("同步已取消");
 
         try {
-          notify?.(`处理笔记 ${++processedCount}/${allNotes.size}...`);
+          notify?.(`解析笔记 ${++processedCount}/${allNotes.size}...`);
 
           const parsedNote = this.noteParser.parse(atomicNote);
 
@@ -178,28 +178,66 @@ export class SyncManager {
             continue;
           }
 
-          // 写入 Markdown（第一阶段不带 parent）
-          const result = await this.markdownWriter.writeNote(parsedNote);
+          parsedNoteMap.set(parsedNote.noteId, parsedNote);
 
-          // 记录 noteId -> { fileName, parsedNote } 映射
-          noteIdFileMap.set(parsedNote.noteId, { fileName: result.fileName, parsedNote });
-
-          // 记录 blockId -> fileName 映射
           if (parsedNote.blockId) {
-            blockIdFileMap.set(parsedNote.blockId, result.fileName);
+            blockIdNoteIdMap.set(parsedNote.blockId, parsedNote.noteId);
           }
 
           // 记录父子关系
           if (parsedNote.parentId) {
-            if (!parentChildMap.has(parsedNote.parentId)) {
-              parentChildMap.set(parsedNote.parentId, []);
+            if (!parentAnnotationsMap.has(parsedNote.parentId)) {
+              parentAnnotationsMap.set(parsedNote.parentId, []);
             }
-            parentChildMap.get(parsedNote.parentId)!.push(result.fileName);
+            parentAnnotationsMap.get(parsedNote.parentId)!.push(parsedNote);
           }
+        } catch (error: unknown) {
+          stats.failedNotes++;
+          const errorMsg = `解析笔记 ${noteId} 失败: ${error instanceof Error ? error.message : String(error)}`;
+          stats.errors.push(errorMsg);
+          console.error(errorMsg);
+        }
+      }
+
+      console.debug(`[SyncManager] 解析完成: ${parsedNoteMap.size} 条有效笔记, ${parentAnnotationsMap.size} 个父笔记有批注`);
+
+      // 6.5 第二轮：写入笔记
+      // 内联模式：批注不单独写文件，直接拼进父笔记
+      // 非内联模式：批注单独写文件 + 父笔记嵌入引用（旧逻辑）
+      const inlineMode = this.settings.inlineAnnotations;
+      // noteId -> { fileName, filePath } 映射（用于链接转换）
+      const noteIdFileMap = new Map<string, { fileName: string; filePath: string }>();
+
+      let writeIndex = 0;
+      for (const [noteId, parsedNote] of parsedNoteMap) {
+        if (signal.aborted) throw new Error("同步已取消");
+
+        try {
+          notify?.(`写入笔记 ${++writeIndex}/${parsedNoteMap.size}...`);
+
+          // 内联模式：跳过批注笔记（它们会被拼进父笔记）
+          if (inlineMode && parsedNote.parentId) {
+            // 但仍要处理批注笔记的资源（图片等）
+            const assetStats = await this.assetHandler.handleAssets(parsedNote);
+            stats.totalAssets += assetStats.total;
+            stats.downloadedAssets += assetStats.downloaded;
+            stats.skippedAssets += assetStats.skipped;
+            stats.failedAssets += assetStats.failed;
+            continue;
+          }
+
+          // 获取本笔记的批注列表（内联模式）
+          let annotations: ParsedNote[] | undefined;
+          if (inlineMode) {
+            annotations = parentAnnotationsMap.get(noteId);
+          }
+
+          const result = await this.markdownWriter.writeNote(parsedNote, undefined, annotations);
+
+          noteIdFileMap.set(noteId, { fileName: result.fileName, filePath: result.filePath });
 
           // 处理资源
           const assetStats = await this.assetHandler.handleAssets(parsedNote);
-
           if (result.isNew) {
             stats.newNotes++;
           } else {
@@ -209,19 +247,34 @@ export class SyncManager {
           stats.downloadedAssets += assetStats.downloaded;
           stats.skippedAssets += assetStats.skipped;
           stats.failedAssets += assetStats.failed;
+
+          // 内联模式下，也要处理批注的资源
+          if (inlineMode && annotations) {
+            for (const ann of annotations) {
+              const annAssetStats = await this.assetHandler.handleAssets(ann);
+              stats.totalAssets += annAssetStats.total;
+              stats.downloadedAssets += annAssetStats.downloaded;
+              stats.skippedAssets += annAssetStats.skipped;
+              stats.failedAssets += annAssetStats.failed;
+            }
+          }
         } catch (error: unknown) {
           stats.failedNotes++;
-          const errorMsg = `处理笔记 ${noteId} 失败: ${error instanceof Error ? error.message : String(error)}`;
+          const errorMsg = `写入笔记 ${noteId} 失败: ${error instanceof Error ? error.message : String(error)}`;
           stats.errors.push(errorMsg);
           console.error(errorMsg);
         }
       }
 
-      // 6.5 第二轮：补全子笔记的 parent frontmatter + 父笔记嵌入引用
-      if (parentChildMap.size > 0) {
-        console.debug(`[SyncManager] 更新父子关系: ${parentChildMap.size} 个父笔记`);
-        for (const [parentId, childFileNames] of parentChildMap) {
+      // 6.6 非内联模式：补全子笔记的 parent frontmatter + 父笔记嵌入引用（旧逻辑）
+      if (!inlineMode && parentAnnotationsMap.size > 0) {
+        console.debug(`[SyncManager] 更新父子关系(嵌入模式): ${parentAnnotationsMap.size} 个父笔记`);
+        for (const [parentId, childNotes] of parentAnnotationsMap) {
           try {
+            const childFileNames = childNotes
+              .map((n) => noteIdFileMap.get(n.noteId)?.fileName)
+              .filter((n): n is string => !!n);
+
             // 更新父笔记：追加子笔记嵌入
             await this.markdownWriter.updateParentEmbeds(parentId, childFileNames);
 
@@ -243,10 +296,17 @@ export class SyncManager {
       for (const [id, info] of noteIdFileMap) {
         linkConvertNoteIdMap.set(id, info.fileName);
       }
+      const blockIdFileMap = new Map<number, string>();
+      for (const [blockId, noteId] of blockIdNoteIdMap) {
+        const info = noteIdFileMap.get(noteId);
+        if (info) {
+          blockIdFileMap.set(blockId, info.fileName);
+        }
+      }
       let linkConvertCount = 0;
       for (const [noteId, info] of noteIdFileMap) {
         try {
-          await this.markdownWriter.convertLinks(info.fileName, linkConvertNoteIdMap, blockIdFileMap);
+          await this.markdownWriter.convertLinks(info.filePath, linkConvertNoteIdMap, blockIdFileMap);
           linkConvertCount++;
         } catch (error) {
           console.warn(`[SyncManager] 链接转换失败: ${noteId}`, error);
@@ -255,6 +315,7 @@ export class SyncManager {
       if (linkConvertCount > 0) {
         console.debug(`[SyncManager] 链接转换完成: ${linkConvertCount} 个笔记`);
       }
+
 
       // 7. 更新元数据：写入所有云端文件的 ETag/MTime（包括跳过的）
       // 参考 Android DownloadService.updateRemoteMetadata() — 即使跳过也要更新元数据

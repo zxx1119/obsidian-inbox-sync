@@ -70,6 +70,15 @@ const t: Translations = {
   conflictOverwrite: { zh: "覆盖（用新笔记替换）", en: "Overwrite (replace with new)" },
   conflictRename: { zh: "重命名（保留两者）", en: "Rename (keep both)" },
 
+  // 笔记组织
+  organizeTitle: { zh: "笔记组织方式", en: "Note Organization" },
+  organizeByTag: { zh: "按标签分文件夹", en: "Organize by tag folders" },
+  organizeByTagDesc: { zh: "按主标签（第一个标签）将笔记归到子文件夹，无标签笔记留在根目录。支持嵌套标签（如 #日记/生活 → inBox/日记/生活/）", en: "File notes into tag subfolders by primary tag. Notes without tags stay in the root folder. Supports nested tags (e.g. #diary/life → inBox/diary/life/)" },
+  tagFolderRoot: { zh: "标签目录根", en: "Tag folder root" },
+  tagFolderRootDesc: { zh: "标签子文件夹的父目录名（留空则直接在存储路径下建标签目录）", en: "Parent folder for tag subfolders (leave empty to create tag folders directly under the storage path)" },
+  inlineAnnotations: { zh: "批注内联到父笔记", en: "Inline annotations to parent" },
+  inlineAnnotationsDesc: { zh: "把批注内容直接拼到父笔记末尾，不再为每条批注生成独立文件。父笔记成为完整的可对照阅读文档", en: "Append annotation content directly to the parent note instead of creating separate files per annotation. The parent note becomes a complete, readable document" },
+
   // 测试连接
   testConnection: { zh: "测试连接", en: "Test connection" },
   testConnectionDesc: { zh: "验证云存储配置是否正确", en: "Verify your cloud storage credentials" },
@@ -321,6 +330,46 @@ export class InboxSyncSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.conflictResolution)
           .onChange(async (value: "skip" | "overwrite" | "rename") => {
             this.plugin.settings.conflictResolution = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // ========== 笔记组织方式 ==========
+    new Setting(containerEl).setName(i18n("organizeTitle")).setHeading();
+
+    new Setting(containerEl)
+      .setName(i18n("organizeByTag"))
+      .setDesc(i18n("organizeByTagDesc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.organizeByTag)
+          .onChange(async (value) => {
+            this.plugin.settings.organizeByTag = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(i18n("tagFolderRoot"))
+      .setDesc(i18n("tagFolderRootDesc"))
+      .addText((text) =>
+        text
+          .setPlaceholder("")
+          .setValue(this.plugin.settings.tagFolderRoot)
+          .onChange(async (value) => {
+            this.plugin.settings.tagFolderRoot = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(i18n("inlineAnnotations"))
+      .setDesc(i18n("inlineAnnotationsDesc"))
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.inlineAnnotations)
+          .onChange(async (value) => {
+            this.plugin.settings.inlineAnnotations = value;
             await this.plugin.saveSettings();
           })
       );

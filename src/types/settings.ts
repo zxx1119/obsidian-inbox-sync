@@ -28,6 +28,11 @@ export interface InboxSyncSettings {
   preserveContentTags: boolean;    // 是否保留内容中的 #tag
   conflictResolution: "skip" | "overwrite" | "rename";  // 冲突处理策略
 
+  // 笔记组织方式
+  organizeByTag: boolean;          // 是否按主标签分文件夹（无标签笔记留在根目录）
+  tagFolderRoot: string;           // 标签子文件夹的根目录名（空=直接在 vaultFolderPath 下建标签目录）
+  inlineAnnotations: boolean;      // 批注是否内联到父笔记（false=保留旧的独立文件+嵌入引用方式）
+
   // 开发者选项（不在 UI 显示）
   debugRootPath: string;        // 空=生产模式用"inBox"，否则用指定值如"inBoxDebug"
 }
@@ -56,6 +61,11 @@ export const DEFAULT_SETTINGS: InboxSyncSettings = {
   enableFrontmatterTags: true,
   preserveContentTags: true,
   conflictResolution: "skip",
+
+  // 笔记组织方式默认值
+  organizeByTag: true,
+  tagFolderRoot: "",              // 空=直接在 vaultFolderPath 下建标签目录
+  inlineAnnotations: true,        // 默认内联批注到父笔记
 
   // 开发者选项（不在 UI 显示，开发时手动在 data.json 中修改）
   debugRootPath: "",
