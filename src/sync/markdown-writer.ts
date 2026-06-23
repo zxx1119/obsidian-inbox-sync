@@ -492,14 +492,16 @@ export class MarkdownWriter {
   /**
    * 给子笔记的 frontmatter 补上 parent 引用
    * 仅在 inlineAnnotations=false 时使用
+   *
+   * @param childFilePath 子笔记的完整路径（含目录和扩展名）
+   *   organizeByTag 开启后子笔记在子目录里，必须用完整路径而非 basePath/fileName
+   * @param parentFileName 父笔记文件名（不含扩展名）
    */
-  async addChildParentRef(childFileName: string, parentFileName: string): Promise<void> {
+  async addChildParentRef(childFilePath: string, parentFileName: string): Promise<void> {
     const vault = this.app.vault;
-    const basePath = this.getBasePath();
-    const filePath = `${basePath}/${childFileName}.md`;
 
     try {
-      const file = vault.getAbstractFileByPath(filePath);
+      const file = vault.getAbstractFileByPath(childFilePath);
       if (!(file instanceof TFile)) return;
 
       let content = await vault.read(file);
@@ -515,7 +517,7 @@ export class MarkdownWriter {
         }
       }
     } catch (error) {
-      console.error(`[MarkdownWriter] 添加 parent 引用失败: ${filePath}`, error);
+      console.error(`[MarkdownWriter] 添加 parent 引用失败: ${childFilePath}`, error);
     }
   }
 

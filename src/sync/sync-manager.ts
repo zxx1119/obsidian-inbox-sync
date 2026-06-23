@@ -347,10 +347,14 @@ export class SyncManager {
             await this.markdownWriter.updateParentEmbeds(parentId, childFileNames);
 
             // 更新子笔记：补上 parent frontmatter
+            // 注意：用完整 filePath 而非 fileName，因为 organizeByTag 开启后子笔记在子目录里
             const parentInfo = noteIdFileMap.get(parentId);
             if (parentInfo) {
-              for (const childFileName of childFileNames) {
-                await this.markdownWriter.addChildParentRef(childFileName, parentInfo.fileName);
+              for (const childNote of childNotes) {
+                const childInfo = noteIdFileMap.get(childNote.noteId);
+                if (childInfo) {
+                  await this.markdownWriter.addChildParentRef(childInfo.filePath, parentInfo.fileName);
+                }
               }
             }
           } catch (error) {
@@ -459,7 +463,6 @@ export class SyncManager {
     metadata: SyncMetadata
   ): { toDownload: CloudFileInfo[]; toDelete: string[]; unchanged: number } {
     const toDownload: CloudFileInfo[] = [];
-    const _unchanged = 0;
     const cloudNoteIds = new Set<string>();
 
     for (const file of cloudFiles) {
