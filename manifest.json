@@ -1,10 +1,10 @@
 {
   "id": "inbox-sync",
-  "name": "inBox Sync",
-  "version": "0.1.0",
+  "name": "inBox Sync (Fork)",
+  "version": "0.2.0",
   "minAppVersion": "1.5.0",
-  "description": "Sync notes from inBox app to your vault via WebDAV/S3.",
-  "author": "gudong",
-  "authorUrl": "https://inbox.gudong.site",
+  "description": "Sync notes from inBox to Obsidian with tag-based folders and inline annotations.",
+  "author": "zxx1119",
+  "authorUrl": "https://github.com/zxx1119",
   "isDesktopOnly": false
 }
