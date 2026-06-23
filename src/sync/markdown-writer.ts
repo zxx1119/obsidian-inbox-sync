@@ -1,6 +1,6 @@
 import { App, TFile, TFolder } from "obsidian";
 import { InboxSyncSettings } from "../types/settings";
-import { ParsedNote } from "../types/inbox";
+import { ParsedNote, ParsedAsset } from "../types/inbox";
 
 /** 批注嵌入块的标记，用于识别和替换 */
 const ANNOTATION_BLOCK_START = "\n\n---\n\n## 批注\n";
@@ -122,14 +122,73 @@ export class MarkdownWriter {
   /**
    * 确定笔记的显示标题
    * 1. 有标题（非 "Untitled"）→ 用原标题
-   * 2. 无标题或 "Untitled" → 用创建时间 "2026-04-11 14:30"
+   * 2. 无标题或 "Untitled" → 取正文前 N 个字（清洗 markdown 语法后）
+   *    - 清洗后正文为空（纯图片/纯标签笔记）→ 回退到日期格式
+   *
+   * 改动（v0.3.0）：之前无标题时直接用日期，现在优先用正文前几个字，更直观。
    */
   private getDisplayTitle(note: ParsedNote): string {
     const title = note.title?.trim();
     if (title && title !== "Untitled") {
       return title;
     }
+
+    // 无标题，尝试用正文前几个字
+    const preview = this.extractContentPreview(note.content, 20);
+    if (preview) {
+      return preview;
+    }
+
+    // 正文清洗后为空，回退到日期
     return this.formatTimeTitle(note.createdAt.getTime());
+  }
+
+  /**
+   * 从正文提取前 N 个字作为标题预览
+   *
+   * 清洗规则：
+   * - 去掉 #标签（#开头，后跟文字/数字/下划线/斜杠）
+   * - 去掉 markdown 语法符号（#、*、>、-、+、`、~、|）
+   * - 去掉图片引用 ![](xxx) 和链接 [text](url)、[[text]]
+   * - 去掉空白字符（空格、换行、制表符）
+   * - 取前 N 个字符
+   *
+   * @param content 笔记正文
+   * @param maxChars 最大字符数（默认 20）
+   * @returns 清洗后的前 N 个字，空则返回空字符串
+   */
+  private extractContentPreview(content: string, maxChars: number = 20): string {
+    if (!content) return "";
+
+    let text = content;
+
+    // 去掉 #标签（#后面跟字母数字下划线斜杠，支持中文标签）
+    text = text.replace(/#[\p{L}\p{N}_/]+/gu, "");
+
+    // 去掉图片引用 ![alt](url)
+    text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, "");
+
+    // 去掉链接 [text](url)
+    text = text.replace(/\[[^\]]*\]\([^)]*\)/g, "");
+
+    // 去掉 wikilink [[text]]
+    text = text.replace(/\[\[[^\]]*\]\]/g, "");
+
+    // 去掉 markdown 语法符号
+    text = text.replace(/[#*>_`~|-]/g, "");
+
+    // 去掉空白字符
+    text = text.replace(/\s/g, "");
+
+    // 去掉首尾标点
+    text = text.replace(/^[，。！？、；：""''（）().,!?;:]+/, "");
+
+    // 截取前 N 个字符
+    if (text.length > maxChars) {
+      text = text.substring(0, maxChars);
+    }
+
+    return text.trim();
   }
 
   /**
@@ -143,6 +202,11 @@ export class MarkdownWriter {
 
   /**
    * 生成 Markdown 内容
+   *
+   * 改动（v0.3.0）：
+   * - 正文后追加资源引用区块，让图片/视频/音频/附件在 Obsidian 里直接可见
+   * - 资源用相对路径引用（`笔记名-assets/文件名`），Obsidian 能自动解析同目录文件
+   *
    * @param annotations 批注列表（父笔记用，内联模式）
    */
   private generateMarkdown(
@@ -185,25 +249,124 @@ export class MarkdownWriter {
     // 正文内容
     lines.push(this.processContent(note));
 
+    // 资源引用区块（图片/视频/音频/附件）
+    // 用笔记文件名-assets/文件名 的相对路径，Obsidian 能识别同目录文件
+    const assetBlock = this.buildAssetBlock(note, displayTitle);
+    if (assetBlock) {
+      lines.push(assetBlock);
+    }
+
     // 内联批注区块（父笔记）
     if (this.settings.inlineAnnotations && annotations && annotations.length > 0) {
-      lines.push(this.buildAnnotationBlock(annotations));
+      lines.push(this.buildAnnotationBlock(annotations, displayTitle));
     }
 
     return lines.join("\n");
   }
 
   /**
-   * 构建内联批注区块
-   * 每条批注：带时间戳标题 + 正文内容
+   * 构建资源引用区块
+   *
+   * 遍历笔记的图片/视频/音频/附件，生成 markdown 引用，追加到正文末尾。
+   * 资源路径用相对路径：`笔记名-assets/文件名`
+   *
+   * 内联批注模式下，批注的资源也追加到这里（批注图片放父笔记的 assets 文件夹）。
+   *
+   * @param note 笔记
+   * @param displayTitle 笔记显示标题（用于算 assets 文件夹名，已 sanitize）
+   * @param annotations 批注列表（内联模式，批注资源也追加）
+   * @returns 资源引用区块字符串，无资源则返回空字符串
    */
-  private buildAnnotationBlock(annotations: ParsedNote[]): string {
+  private buildAssetBlock(
+    note: ParsedNote,
+    displayTitle: string,
+    annotations?: ParsedNote[]
+  ): string {
+    // assets 文件夹名 = 笔记文件名-assets（用 sanitize 过的标题）
+    const noteFileName = this.sanitizeFileName(displayTitle);
+    const assetDir = `${noteFileName}-assets`;
+
+    const lines: string[] = [];
+    let hasAny = false;
+
+    // 收集所有资源：本笔记 + 批注（内联模式下批注资源也跟父笔记走）
+    const allNotes: ParsedNote[] = [note];
+    if (annotations && annotations.length > 0) {
+      allNotes.push(...annotations);
+    }
+
+    for (const n of allNotes) {
+      // 图片
+      for (const img of n.images) {
+        const fileName = this.extractAssetFileName(img);
+        if (fileName) {
+          lines.push(`![](${assetDir}/${fileName})`);
+          hasAny = true;
+        }
+      }
+      // 视频
+      for (const vid of n.videos) {
+        const fileName = this.extractAssetFileName(vid);
+        if (fileName) {
+          lines.push(`![](${assetDir}/${fileName})`);
+          hasAny = true;
+        }
+      }
+      // 音频（用嵌入引用，Obsidian 能播放）
+      for (const aud of n.audios) {
+        const fileName = this.extractAssetFileName(aud);
+        if (fileName) {
+          lines.push(`![](${assetDir}/${fileName})`);
+          hasAny = true;
+        }
+      }
+      // 附件（用链接，Obsidian 能点击打开）
+      for (const att of n.attachments) {
+        const fileName = this.extractAssetFileName(att);
+        if (fileName) {
+          lines.push(`[${fileName}](${assetDir}/${fileName})`);
+          hasAny = true;
+        }
+      }
+    }
+
+    if (!hasAny) return "";
+
+    // 在资源区块前加分隔
+    return `\n\n---\n\n${lines.join("\n\n")}`;
+  }
+
+  /**
+   * 从 ParsedAsset 提取文件名
+   * localPath 现在只是文件名（note-parser 改动后），直接返回
+   * 兜底：如果含路径，取最后一段
+   */
+  private extractAssetFileName(asset: ParsedAsset): string {
+    if (!asset.localPath) return "";
+    const parts = asset.localPath.split("/");
+    return parts[parts.length - 1] || "";
+  }
+
+  /**
+   * 构建内联批注区块
+   * 每条批注：带时间戳标题 + 正文内容 + 资源引用
+   *
+   * 改动（v0.3.0）：批注的资源也追加到批注块里，用父笔记的 assets 文件夹路径。
+   */
+  private buildAnnotationBlock(
+    annotations: ParsedNote[],
+    parentDisplayTitle: string
+  ): string {
     // 按创建时间升序排列
     const sorted = [...annotations].sort(
       (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
     );
 
     const lines: string[] = [ANNOTATION_INLINE_START];
+
+    // 父笔记的 assets 文件夹名（批注资源放这里）
+    const parentFileName = this.sanitizeFileName(parentDisplayTitle);
+    const parentAssetDir = `${parentFileName}-assets`;
 
     for (const ann of sorted) {
       const timeStr = this.formatAnnotationTime(ann.createdAt.getTime());
@@ -219,11 +382,46 @@ export class MarkdownWriter {
         lines.push(content);
       }
 
-      // 批注里的图片等资源引用（已在 content 中，这里不额外处理）
+      // 批注的资源引用（图片/视频/音频/附件）
+      const annAssets = this.collectAssetLines(ann, parentAssetDir);
+      if (annAssets.length > 0) {
+        lines.push("");
+        lines.push(...annAssets);
+      }
+
       lines.push("");
     }
 
     return lines.join("\n");
+  }
+
+  /**
+   * 收集一条笔记的所有资源引用行（图片/视频/音频/附件）
+   * @param note 笔记
+   * @param assetDir assets 文件夹名（如 "今天-assets"）
+   * @returns markdown 引用行数组
+   */
+  private collectAssetLines(note: ParsedNote, assetDir: string): string[] {
+    const lines: string[] = [];
+
+    for (const img of note.images) {
+      const fileName = this.extractAssetFileName(img);
+      if (fileName) lines.push(`![](${assetDir}/${fileName})`);
+    }
+    for (const vid of note.videos) {
+      const fileName = this.extractAssetFileName(vid);
+      if (fileName) lines.push(`![](${assetDir}/${fileName})`);
+    }
+    for (const aud of note.audios) {
+      const fileName = this.extractAssetFileName(aud);
+      if (fileName) lines.push(`![](${assetDir}/${fileName})`);
+    }
+    for (const att of note.attachments) {
+      const fileName = this.extractAssetFileName(att);
+      if (fileName) lines.push(`[${fileName}](${assetDir}/${fileName})`);
+    }
+
+    return lines;
   }
 
   /**

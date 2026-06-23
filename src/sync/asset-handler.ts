@@ -30,8 +30,15 @@ export class AssetHandler {
 
   /**
    * 处理笔记的所有资源
+   *
+   * 改动（v0.3.0）：接收 noteFilePath 参数，资源下载到笔记同目录下的
+   * `笔记名-assets/` 子文件夹，而不是全局的 `inBox/assets/images/`。
+   * 这样图片跟着笔记走，Obsidian 里图文在一起。
+   *
+   * @param note 笔记数据
+   * @param noteFilePath 笔记在 vault 中的完整路径（如 `inBox/日记/生活/今天.md`）
    */
-  async handleAssets(note: ParsedNote): Promise<AssetStats> {
+  async handleAssets(note: ParsedNote, noteFilePath: string): Promise<AssetStats> {
     const stats: AssetStats = {
       total: 0,
       downloaded: 0,
@@ -50,7 +57,7 @@ export class AssetHandler {
 
     for (const asset of allAssets) {
       try {
-        const downloaded = await this.downloadAsset(asset);
+        const downloaded = await this.downloadAsset(asset, noteFilePath);
         if (downloaded) {
           stats.downloaded++;
         } else {
@@ -67,9 +74,13 @@ export class AssetHandler {
 
   /**
    * 下载单个资源文件
+   *
+   * 资源存放路径：笔记同目录下的 `笔记名-assets/文件名`
+   * 例如笔记 `inBox/日记/生活/今天.md`，图片存到 `inBox/日记/生活/今天-assets/img-001.jpg`
+   *
    * @returns true 表示新下载，false 表示已存在
    */
-  private async downloadAsset(asset: ParsedAsset): Promise<boolean> {
+  private async downloadAsset(asset: ParsedAsset, noteFilePath: string): Promise<boolean> {
     // 跳过无效资源
     if (!asset.remoteUrl && !asset.remotePath) {
       return false;
@@ -78,7 +89,7 @@ export class AssetHandler {
       return false;
     }
 
-    const localPath = this.getAssetLocalPath(asset);
+    const localPath = this.getAssetLocalPath(asset, noteFilePath);
 
     // 检查是否已处理过（避免重复下载）
     if (this.processedAssets.has(localPath)) {
@@ -109,11 +120,25 @@ export class AssetHandler {
   }
 
   /**
-   * 获取资源本地完整路径
+   * 获取资源在 vault 中的完整路径
+   *
+   * 规则：笔记同目录下建 `笔记名-assets/` 子文件夹，资源放里面。
+   * 例如笔记 `inBox/日记/生活/今天.md` → 资源 `inBox/日记/生活/今天-assets/img-001.jpg`
+   *
+   * @param asset 资源（localPath 现在只是文件名）
+   * @param noteFilePath 笔记完整路径（含 .md 扩展名）
    */
-  private getAssetLocalPath(asset: ParsedAsset): string {
-    const basePath = this.settings.vaultFolderPath.replace(/^\/+|\/+$/g, "");
-    return `${basePath}/${asset.localPath}`;
+  private getAssetLocalPath(asset: ParsedAsset, noteFilePath: string): string {
+    // 笔记所在目录（如 inBox/日记/生活）
+    const dir = noteFilePath.substring(0, noteFilePath.lastIndexOf("/"));
+    // 笔记文件名（不含扩展名，如 今天）
+    const noteName = noteFilePath.substring(
+      noteFilePath.lastIndexOf("/") + 1,
+      noteFilePath.lastIndexOf(".")
+    );
+    // 资源文件名（asset.localPath 现在只是文件名）
+    const assetFileName = asset.localPath;
+    return `${dir}/${noteName}-assets/${assetFileName}`;
   }
 
   /**

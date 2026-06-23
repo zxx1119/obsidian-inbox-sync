@@ -304,8 +304,8 @@ export class SyncManager {
 
           noteIdFileMap.set(noteId, { fileName: result.fileName, filePath: result.filePath });
 
-          // 处理资源
-          const assetStats = await this.assetHandler.handleAssets(parsedNote);
+          // 处理资源（v0.3.0：传入笔记 filePath，资源下载到笔记同目录的 assets 子文件夹）
+          const assetStats = await this.assetHandler.handleAssets(parsedNote, result.filePath);
           if (result.isNew) {
             stats.newNotes++;
           } else {
@@ -317,9 +317,10 @@ export class SyncManager {
           stats.failedAssets += assetStats.failed;
 
           // 内联模式下，也要处理批注的资源
+          // 批注资源跟父笔记走（放父笔记的 assets 文件夹）
           if (inlineMode && annotations) {
             for (const ann of annotations) {
-              const annAssetStats = await this.assetHandler.handleAssets(ann);
+              const annAssetStats = await this.assetHandler.handleAssets(ann, result.filePath);
               stats.totalAssets += annAssetStats.total;
               stats.downloadedAssets += annAssetStats.downloaded;
               stats.skippedAssets += annAssetStats.skipped;

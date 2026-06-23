@@ -203,7 +203,7 @@ export class NoteParser {
     return {
       remoteUrl: voice.remoteUrl || voice.path,
       remotePath: voice.path,
-      localPath: `assets/audios/${fileName}`,
+      localPath: fileName,  // 只存文件名，目录由 AssetHandler 动态决定
       mimeType: "audio/mpeg",
       type: ResourceType.AUDIO,
       duration: voice.duration,
@@ -220,21 +220,20 @@ export class NoteParser {
 
   /**
    * 获取资源本地路径
+   *
+   * 改动（v0.3.0）：不再写死 `assets/images/` 全局目录。
+   * localPath 只存文件名（如 img-001.jpg），实际存放路径由 AssetHandler
+   * 根据笔记的 filePath 动态拼接为 `笔记同目录/笔记名-assets/文件名`。
+   * 这样图片跟着笔记走，不再全堆在 inBox/assets/images/ 下。
+   *
+   * type 参数保留，供未来按类型分子目录时使用（目前统一放 笔记名-assets/）。
    */
   private getLocalPath(
     type: ResourceType,
     fileName: string
   ): string {
-    switch (type) {
-      case ResourceType.IMAGE:
-        return `assets/images/${fileName}`;
-      case ResourceType.VIDEO:
-        return `assets/videos/${fileName}`;
-      case ResourceType.AUDIO:
-        return `assets/audios/${fileName}`;
-      default:
-        return `assets/attachments/${fileName}`;
-    }
+    // 只返回文件名，目录由 AssetHandler 动态决定
+    return fileName;
   }
 
   /**
