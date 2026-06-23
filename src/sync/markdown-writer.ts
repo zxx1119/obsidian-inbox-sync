@@ -267,13 +267,16 @@ export class MarkdownWriter {
   /**
    * 构建资源引用区块
    *
-   * 遍历笔记的图片/视频/音频/附件，生成 markdown 引用，追加到正文末尾。
-   * 资源路径用相对路径：`笔记名-assets/文件名`
-   *
-   * 内联批注模式下，批注的资源也追加到这里（批注图片放父笔记的 assets 文件夹）。
+   * 改动（v0.3.1）：
+   *   1. assetDir 改成 vault 根路径 `inBox/assets`，不再用 `笔记名-assets`。
+   *      原因：笔记名本身是一句话，生成的 `笔记名-assets/` 文件夹在 Obsidian
+   *      文件树里会跟 .md 文件折叠成同一节点，导致点不开笔记只能看到图片。
+   *   2. 图片/视频/音频的引用从 `![]()` 嵌入式改成 `[]()` 跳转链接——
+   *      避免图片直接渲染进笔记把正文挤掉，用户点击链接即可跳转查看。
+   *   3. 附件保持 `[文件名](路径)` 跳转链接（原本就是这样）。
    *
    * @param note 笔记
-   * @param displayTitle 笔记显示标题（用于算 assets 文件夹名，已 sanitize）
+   * @param displayTitle 笔记显示标题（v0.3.1 起不再用于算 assets 目录名）
    * @param annotations 批注列表（内联模式，批注资源也追加）
    * @returns 资源引用区块字符串，无资源则返回空字符串
    */
@@ -282,9 +285,9 @@ export class MarkdownWriter {
     displayTitle: string,
     annotations?: ParsedNote[]
   ): string {
-    // assets 文件夹名 = 笔记文件名-assets（用 sanitize 过的标题）
-    const noteFileName = this.sanitizeFileName(displayTitle);
-    const assetDir = `${noteFileName}-assets`;
+    // v0.3.1: 所有资源统一进 vault 根的 inBox/assets/
+    void displayTitle;
+    const assetDir = `inBox/assets`;
 
     const lines: string[] = [];
     let hasAny = false;
@@ -296,11 +299,11 @@ export class MarkdownWriter {
     }
 
     for (const n of allNotes) {
-      // 图片
+      // 图片（v0.3.1: 改成跳转链接，避免直接嵌入挤掉正文）
       for (const img of n.images) {
         const fileName = this.extractAssetFileName(img);
         if (fileName) {
-          lines.push(`![](${assetDir}/${fileName})`);
+          lines.push(`[${fileName}](${assetDir}/${fileName})`);
           hasAny = true;
         }
       }
@@ -308,15 +311,15 @@ export class MarkdownWriter {
       for (const vid of n.videos) {
         const fileName = this.extractAssetFileName(vid);
         if (fileName) {
-          lines.push(`![](${assetDir}/${fileName})`);
+          lines.push(`[${fileName}](${assetDir}/${fileName})`);
           hasAny = true;
         }
       }
-      // 音频（用嵌入引用，Obsidian 能播放）
+      // 音频
       for (const aud of n.audios) {
         const fileName = this.extractAssetFileName(aud);
         if (fileName) {
-          lines.push(`![](${assetDir}/${fileName})`);
+          lines.push(`[${fileName}](${assetDir}/${fileName})`);
           hasAny = true;
         }
       }
@@ -351,7 +354,7 @@ export class MarkdownWriter {
    * 构建内联批注区块
    * 每条批注：带时间戳标题 + 正文内容 + 资源引用
    *
-   * 改动（v0.3.0）：批注的资源也追加到批注块里，用父笔记的 assets 文件夹路径。
+   * 改动（v0.3.1）：批注资源也走全局 `inBox/assets` 目录，跟主笔记一致。
    */
   private buildAnnotationBlock(
     annotations: ParsedNote[],
@@ -364,9 +367,9 @@ export class MarkdownWriter {
 
     const lines: string[] = [ANNOTATION_INLINE_START];
 
-    // 父笔记的 assets 文件夹名（批注资源放这里）
-    const parentFileName = this.sanitizeFileName(parentDisplayTitle);
-    const parentAssetDir = `${parentFileName}-assets`;
+    // v0.3.1: 批注资源也走全局 inBox/assets，跟主笔记一致
+    void parentDisplayTitle;
+    const parentAssetDir = `inBox/assets`;
 
     for (const ann of sorted) {
       const timeStr = this.formatAnnotationTime(ann.createdAt.getTime());
@@ -397,8 +400,11 @@ export class MarkdownWriter {
 
   /**
    * 收集一条笔记的所有资源引用行（图片/视频/音频/附件）
+   *
+   * 改动（v0.3.1）：所有引用改成 `[]()` 跳转链接（不再用 `![]()` 嵌入）。
+   *
    * @param note 笔记
-   * @param assetDir assets 文件夹名（如 "今天-assets"）
+   * @param assetDir assets 路径（v0.3.1 起统一为 "inBox/assets"）
    * @returns markdown 引用行数组
    */
   private collectAssetLines(note: ParsedNote, assetDir: string): string[] {
@@ -406,15 +412,15 @@ export class MarkdownWriter {
 
     for (const img of note.images) {
       const fileName = this.extractAssetFileName(img);
-      if (fileName) lines.push(`![](${assetDir}/${fileName})`);
+      if (fileName) lines.push(`[${fileName}](${assetDir}/${fileName})`);
     }
     for (const vid of note.videos) {
       const fileName = this.extractAssetFileName(vid);
-      if (fileName) lines.push(`![](${assetDir}/${fileName})`);
+      if (fileName) lines.push(`[${fileName}](${assetDir}/${fileName})`);
     }
     for (const aud of note.audios) {
       const fileName = this.extractAssetFileName(aud);
-      if (fileName) lines.push(`![](${assetDir}/${fileName})`);
+      if (fileName) lines.push(`[${fileName}](${assetDir}/${fileName})`);
     }
     for (const att of note.attachments) {
       const fileName = this.extractAssetFileName(att);

@@ -31,12 +31,11 @@ export class AssetHandler {
   /**
    * 处理笔记的所有资源
    *
-   * 改动（v0.3.0）：接收 noteFilePath 参数，资源下载到笔记同目录下的
-   * `笔记名-assets/` 子文件夹，而不是全局的 `inBox/assets/images/`。
-   * 这样图片跟着笔记走，Obsidian 里图文在一起。
+   * 改动（v0.3.1）：资源统一下载到 vault 根的 `inBox/assets/` 目录，
+   * 不再按笔记名建子文件夹。noteFilePath 参数保留是为了不破坏调用方签名。
    *
    * @param note 笔记数据
-   * @param noteFilePath 笔记在 vault 中的完整路径（如 `inBox/日记/生活/今天.md`）
+   * @param noteFilePath 笔记在 vault 中的完整路径（v0.3.1 起仅用于日志，不参与路径拼接）
    */
   async handleAssets(note: ParsedNote, noteFilePath: string): Promise<AssetStats> {
     const stats: AssetStats = {
@@ -75,8 +74,7 @@ export class AssetHandler {
   /**
    * 下载单个资源文件
    *
-   * 资源存放路径：笔记同目录下的 `笔记名-assets/文件名`
-   * 例如笔记 `inBox/日记/生活/今天.md`，图片存到 `inBox/日记/生活/今天-assets/img-001.jpg`
+   * 资源存放路径（v0.3.1）：统一存到 vault 根 `inBox/assets/文件名`。
    *
    * @returns true 表示新下载，false 表示已存在
    */
@@ -122,23 +120,21 @@ export class AssetHandler {
   /**
    * 获取资源在 vault 中的完整路径
    *
-   * 规则：笔记同目录下建 `笔记名-assets/` 子文件夹，资源放里面。
-   * 例如笔记 `inBox/日记/生活/今天.md` → 资源 `inBox/日记/生活/今天-assets/img-001.jpg`
+   * 改动（v0.3.1）：所有资源统一存到 vault 根的 `inBox/assets/` 目录，
+   * 而不是每篇笔记一个 `笔记名-assets/` 子文件夹。
+   * 原因：笔记名本身就是一句话，生成 `${noteName}-assets/` 后会跟 .md 文件
+   * 在 Obsidian 文件树里折叠成同一节点，导致用户点不开笔记、只看到图片。
+   * 改成全局 assets 目录后，.md 文件不再被折叠，且跨设备（同 vault）路径稳定。
    *
    * @param asset 资源（localPath 现在只是文件名）
-   * @param noteFilePath 笔记完整路径（含 .md 扩展名）
+   * @param noteFilePath 笔记完整路径（含 .md 扩展名，v0.3.1 起不再用于拼接）
    */
   private getAssetLocalPath(asset: ParsedAsset, noteFilePath: string): string {
-    // 笔记所在目录（如 inBox/日记/生活）
-    const dir = noteFilePath.substring(0, noteFilePath.lastIndexOf("/"));
-    // 笔记文件名（不含扩展名，如 今天）
-    const noteName = noteFilePath.substring(
-      noteFilePath.lastIndexOf("/") + 1,
-      noteFilePath.lastIndexOf(".")
-    );
-    // 资源文件名（asset.localPath 现在只是文件名）
+    // v0.3.1: 所有资源统一进 vault 根的 inBox/assets/
+    // noteFilePath 参数保留是为了不破坏调用方签名，但不再使用
+    void noteFilePath;
     const assetFileName = asset.localPath;
-    return `${dir}/${noteName}-assets/${assetFileName}`;
+    return `inBox/assets/${assetFileName}`;
   }
 
   /**
