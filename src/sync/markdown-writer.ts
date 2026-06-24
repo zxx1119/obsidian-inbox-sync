@@ -60,7 +60,8 @@ export class MarkdownWriter {
 
     // 确定标题
     const displayTitle = this.getDisplayTitle(note);
-    let fileName = this.sanitizeFileName(displayTitle);
+    const datePrefix = this.formatDatePrefix(note.createdAt);
+    let fileName = `${datePrefix} ${this.sanitizeFileName(displayTitle)}`;
     let filePath = `${folderPath}/${fileName}.md`;
 
     // 检查同名文件是否已存在但属于不同笔记
@@ -203,6 +204,25 @@ export class MarkdownWriter {
     const d = new Date(timestamp);
     const pad = (n: number) => n.toString().padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}.${pad(d.getSeconds())}`;
+  }
+
+  /**
+   * 格式化文件名日期前缀 "YY-MM-DD"
+   *
+   * 用笔记的 createdAt（初始创建时间，固定不变），
+   * 加在文件名前面让 Obsidian 文件树按时间排序。
+   *
+   * 用 2 位年份（如 25）而非 4 位（2025），更短更直观。
+   * 跨世纪时可能混淆，但 inBox 笔记场景下不是问题。
+   *
+   * @param date 笔记创建时间
+   * @returns 如 "25-06-15"
+   */
+  private formatDatePrefix(date: Date): string {
+    const yy = String(date.getFullYear()).slice(-2);
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
   }
 
   /**
