@@ -221,12 +221,10 @@ export class NoteParser {
   /**
    * 获取资源本地路径
    *
-   * 改动（v0.3.0）：不再写死 `assets/images/` 全局目录。
-   * localPath 只存文件名（如 img-001.jpg），实际存放路径由 AssetHandler
-   * 根据笔记的 filePath 动态拼接为 `笔记同目录/笔记名-assets/文件名`。
-   * 这样图片跟着笔记走，不再全堆在 inBox/assets/images/ 下。
+   * v0.3.0 起不再写死 `assets/images/` 全局目录，localPath 只存文件名。
+   * v0.3.1 起，实际存放路径由 AssetHandler 统一决定为 vault 根的 `inBox/assets/文件名`。
    *
-   * type 参数保留，供未来按类型分子目录时使用（目前统一放 笔记名-assets/）。
+   * type 参数保留，供未来按类型分子目录时使用（目前统一放 inBox/assets/）。
    */
   private getLocalPath(
     type: ResourceType,

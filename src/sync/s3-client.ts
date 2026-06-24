@@ -143,7 +143,7 @@ export class S3Client implements CloudClient {
       console.debug("[S3] Region:", this.config.region);
       console.debug("[S3] Bucket:", this.bucket);
       console.debug("[S3] RootPath:", this.rootPath);
-      console.debug("[S3] AccessKey (前4位):", this.config.accessKeyId.substring(0, 4) + "****");
+      console.debug("[S3] AccessKey: ******（已配置）");
 
       const client = await this.getClient();
       const { ListObjectsV2Command } = await getAWSSDK();

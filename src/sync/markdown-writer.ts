@@ -2,11 +2,8 @@ import { App, TFile, TFolder } from "obsidian";
 import { InboxSyncSettings } from "../types/settings";
 import { ParsedNote, ParsedAsset } from "../types/inbox";
 
-/** 批注嵌入块的标记，用于识别和替换 */
+/** 批注区块的起始标记，用于识别和替换（内联模式和嵌入模式共用） */
 const ANNOTATION_BLOCK_START = "\n\n---\n\n## 批注\n";
-
-/** 内联批注的单条标记，用于识别和替换 */
-const ANNOTATION_INLINE_START = "\n\n---\n\n## 批注\n";
 
 /** writeNote 的返回结果 */
 export interface WriteNoteResult {
@@ -148,10 +145,13 @@ export class MarkdownWriter {
    *
    * 清洗规则：
    * - 去掉 #标签（#开头，后跟文字/数字/下划线/斜杠）
-   * - 去掉 markdown 语法符号（#、*、>、-、+、`、~、|）
    * - 去掉图片引用 ![](xxx) 和链接 [text](url)、[[text]]
+   * - 去掉行首的 markdown 语法符号（# 标题、> 引用、- + 列表、| 表格、` 代码）
    * - 去掉空白字符（空格、换行、制表符）
    * - 取前 N 个字符
+   *
+   * 注意：只清洗 ASCII 范围的 markdown 符号，不动中文标点
+   * （避免误删中文破折号 —、省略号……等）
    *
    * @param content 笔记正文
    * @param maxChars 最大字符数（默认 20）
@@ -174,8 +174,13 @@ export class MarkdownWriter {
     // 去掉 wikilink [[text]]
     text = text.replace(/\[\[[^\]]*\]\]/g, "");
 
-    // 去掉 markdown 语法符号
-    text = text.replace(/[#*>_`~|-]/g, "");
+    // 去掉行首的 markdown 语法符号（只删 ASCII 范围，不动中文标点）
+    // # 标题、> 引用、- + * 列表、| 表格行首、` 代码块标记
+    text = text.replace(/^[\s#>*\-+|`]+/gm, "");
+
+    // 去掉剩余的行内 markdown 强调符号（只删 ASCII 的 _ 和 ` 和 *）
+    // 注意：不删 -（可能跟中文内容混用），不删 |（表格内部已有处理）
+    text = text.replace(/[_`*]/g, "");
 
     // 去掉空白字符
     text = text.replace(/\s/g, "");
@@ -365,7 +370,7 @@ export class MarkdownWriter {
       (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
     );
 
-    const lines: string[] = [ANNOTATION_INLINE_START];
+    const lines: string[] = [ANNOTATION_BLOCK_START];
 
     // v0.3.1: 批注资源也走全局 inBox/assets，跟主笔记一致
     void parentDisplayTitle;
@@ -783,9 +788,9 @@ export class MarkdownWriter {
   /**
    * 通过 noteId 查找笔记的 parent noteId（从 frontmatter 的 parent_id 字段读取）
    * 用于删除批注前确认其父笔记，以便后续刷新父笔记的内联批注区
-   * @returns noteId 和 parentId（如果有的话），找不到返回 null
+   * @returns parentId（如果有的话），找不到或无 parent 返回 null
    */
-  async findNoteParentId(noteId: string): Promise<{ noteId: string; parentId: string } | null> {
+  async findNoteParentId(noteId: string): Promise<string | null> {
     const vault = this.app.vault;
     const filePath = await this.findNotePath(noteId);
     if (!filePath) return null;
@@ -796,7 +801,7 @@ export class MarkdownWriter {
       const content = await vault.read(file);
       const parentIdMatch = content.match(/parent_id:\s*(\S+)/);
       if (parentIdMatch) {
-        return { noteId, parentId: parentIdMatch[1] };
+        return parentIdMatch[1];
       }
     } catch {
       // 忽略

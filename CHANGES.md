@@ -1,5 +1,51 @@
 # obsidian-inbox-sync 改造说明
 
+## v0.3.2 — 代码审查修复
+
+系统审查后修复 13 个问题，按严重程度分 P0/P1/P2/P3 四级。
+
+### P0 严重问题（死代码）
+
+1. **删除死代码 `webdav-client.ts`**
+   - 原文件里的 `WebDAVClient` 类从未被引用，实际用的是 `webdav-native.ts` 的 `WebDAVNativeClient`
+   - 两者 `listNotes()` 路径不一致（一个查 `batch-backup/notes/`，一个查 `notes/`），保留死代码会让维护者混淆
+
+2. **删除 `withRetry` 死代码**
+   - `sync-manager.ts` 的 `withRetry` 方法定义了但从未被调用
+   - 下载笔记/资源没有重试逻辑，单次失败就失败。未来若要加重试再实现
+
+### P1 逻辑漏洞
+
+3. **内联模式切换时清理旧文件**
+   - 问题：`inlineAnnotations` 从 false→true 时，旧的独立批注 .md 文件不会被清理，会跟新的内联批注共存
+   - 修复：检测到该配置变化时，递归扫描删除所有带 `parent_id` frontmatter 的 .md 文件
+   - `checkSettingsChanged` 改为返回具体变化项，主流程根据变化项决定清理动作
+
+4. **移除未实现的假配置**
+   - `preserveContentTags`：UI 有开关但代码永远保留标签，开关无效
+   - `conflictResolution`：UI 有下拉但代码永远是 overwrite，skip/rename 策略未实现
+   - 修复：从设置页移除这两个选项（settings 字段保留兼容旧 data.json，标记 @deprecated）
+
+### P2 防御性修复
+
+5. **`cloudClient` undefined 防御**
+   - `initializeClients` 如果 storageType 异常（data.json 被改坏），cloudClient 会是 undefined
+   - 修复：storageType 不匹配时抛明确错误，避免 undefined 传给 AssetHandler 埋雷
+
+6. **修正标题预览清洗破坏中文标点**
+   - 问题：`/[#*>_`~|-]/g` 会误删中文破折号 `—` 和省略号
+   - 修复：只清洗 ASCII 范围的 markdown 符号，行首符号单独处理，行内只删 `_` `` ` `` `*`
+
+### P3 代码质量
+
+7. **合并重复常量**：`ANNOTATION_BLOCK_START` 和 `ANNOTATION_INLINE_START` 值相同，合并为一个
+8. **修正 `note-parser.ts` 过时注释**：注释还在说 v0.3.0 的"笔记名-assets"，已更新为 v0.3.1 的全局 `inBox/assets/`
+9. **简化 `findNoteParentId` 返回类型**：从 `{ noteId, parentId }` 简化为 `string | null`（调用方只用 parentId）
+10. **脱敏 debug 日志**：WebDAV 不再打印用户名和 Base64 认证信息，S3 不再打印 AccessKey 前 4 位
+11. **修正 `listNotes` 跳过逻辑**：原代码 `for (let i = 1; ...)` 靠顺序跳过目录本身，改为按文件名 `.json` 后缀过滤，更健壮
+
+---
+
 ## v0.3.1 — 修复笔记点不开、图片挤掉正文的问题
 
 ### 问题

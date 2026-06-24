@@ -63,7 +63,8 @@ export class WebDAVNativeClient implements CloudClient {
     const auth = btoa(`${this.username}:${this.password}`);
 
     console.debug(`[WebDAV] ${method} ${url}`);
-    console.debug(`[WebDAV] 认证信息: username=${this.username}, auth=${auth.substring(0, 10)}...`);
+    // 脱敏：不打印用户名和认证信息，避免泄露到日志
+    console.debug(`[WebDAV] 认证: Basic ******（已配置）`);
     console.debug(`[WebDAV] 完整参数: url=${this.url}, rootPath=${this.rootPath}, path=${path}`);
 
     const response = await requestUrl({
@@ -234,26 +235,31 @@ export class WebDAVNativeClient implements CloudClient {
         const xmlDoc = parser.parseFromString(result.text, "text/xml");
         const responses = xmlDoc.getElementsByTagNameNS("*", "response");
 
-        for (let i = 1; i < responses.length; i++) {
+        for (let i = 0; i < responses.length; i++) {
           const response = responses[i];
           const href = response.getElementsByTagNameNS("*", "href")[0]?.textContent;
           const propStats = response.getElementsByTagNameNS("*", "propstat");
 
-          if (href && propStats.length > 0) {
-            const props = propStats[0].getElementsByTagNameNS("*", "prop")[0];
-            const etag = props?.getElementsByTagNameNS("*", "getetag")[0]?.textContent;
-            const filename = decodeURIComponent(href.split("/").filter(Boolean).pop() || "");
+          if (!href || propStats.length === 0) continue;
 
-            if (!filename.endsWith(".json")) continue;
+          const props = propStats[0].getElementsByTagNameNS("*", "prop")[0];
+          const etag = props?.getElementsByTagNameNS("*", "getetag")[0]?.textContent;
 
-            const noteId = filename.replace(".json", "");
+          // 从 href 解析文件名（最后一个非空段）
+          const hrefParts = href.split("/").filter(Boolean);
+          const filename = decodeURIComponent(hrefParts[hrefParts.length - 1] || "");
 
-            files.push({
-              id: noteId,
-              etag: etag || undefined,
-              path: `notes/${filename}`,
-            });
-          }
+          // 跳过目录本身（PROPFIND Depth:1 会包含目录自身）
+          // 目录的特征：href 以 / 结尾，或文件名不含 .json
+          if (!filename.endsWith(".json")) continue;
+
+          const noteId = filename.replace(".json", "");
+
+          files.push({
+            id: noteId,
+            etag: etag || undefined,
+            path: `notes/${filename}`,
+          });
         }
       }
     } catch (error) {

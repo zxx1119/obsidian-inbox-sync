@@ -1,4 +1,4 @@
-import { App } from "obsidian";
+import { App, TFile, TFolder } from "obsidian";
 import { InboxSyncSettings, getCloudRootPath } from "../types/settings";
 import { CloudClient, CloudFileInfo } from "./cloud-client";
 import { WebDAVNativeClient } from "./webdav-native";
@@ -56,7 +56,7 @@ export class SyncManager {
         this.settings.webdavPassword,
         rootPath
       );
-    } else {
+    } else if (this.settings.storageType === "s3") {
       this.cloudClient = new S3Client(
         this.settings.s3Endpoint,
         this.settings.s3AccessKey,
@@ -65,6 +65,15 @@ export class SyncManager {
         this.settings.s3Region,
         rootPath
       );
+    } else {
+      // 防御：storageType 异常（比如 data.json 被手动改坏）时，避免 cloudClient 为 undefined
+      // 后续被传给 AssetHandler 埋雷。抛出明确错误，让上层捕获提示用户。
+      throw new Error(`不支持的存储类型: ${this.settings.storageType}（请检查插件配置）`);
+    }
+
+    // 二次防御：确保 client 已初始化
+    if (!this.cloudClient) {
+      throw new Error("云存储客户端初始化失败");
     }
   }
 
@@ -120,10 +129,24 @@ export class SyncManager {
 
       // 1.5 检测关键配置变化：organizeByTag / inlineAnnotations / vaultFolderPath / tagFolderRoot
       // 任一变化都触发全量重同步（清空 lastSyncMeta），否则旧笔记会留在旧目录结构里
-      const settingsChanged = this.checkSettingsChanged(syncMetadata);
-      if (settingsChanged) {
-        console.debug("[SyncManager] 关键配置已变化，触发全量重同步");
+      const settingsChange = this.checkSettingsChanged(syncMetadata);
+      if (settingsChange.changed) {
+        console.debug(`[SyncManager] 关键配置已变化 [${settingsChange.changes.join(", ")}]，触发全量重同步`);
         notify?.("检测到笔记组织配置变化，执行全量重同步...");
+
+        // inlineAnnotations 切换时，清理旧模式的产物：
+        // - false→true：旧模式生成了独立批注 .md 文件，需要删除（它们有 parent_id frontmatter）
+        // - true→false：旧模式在父笔记里留了内联 "## 批注" 区块，
+        //   全量重同步会重新下载父笔记覆盖，无需特别清理
+        if (settingsChange.changes.includes("inlineAnnotations")) {
+          const oldInline = syncMetadata.lastSettings?.inlineAnnotations ?? false;
+          if (oldInline === false) {
+            // false → true：清理独立批注文件
+            notify?.("清理旧的独立批注文件...");
+            await this.cleanupStandaloneAnnotations();
+          }
+        }
+
         syncMetadata.lastSyncMeta = {};
         syncMetadata.notePaths = {};
       }
@@ -147,9 +170,9 @@ export class SyncManager {
           if (signal.aborted) throw new Error("同步已取消");
           try {
             // 删除前先查这条笔记的 parent（如果是批注，需要刷新父笔记）
-            const parentInfo = await this.markdownWriter.findNoteParentId(noteId);
-            if (parentInfo?.parentId) {
-              parentIdsToRefresh.add(parentInfo.parentId);
+            const parentId = await this.markdownWriter.findNoteParentId(noteId);
+            if (parentId) {
+              parentIdsToRefresh.add(parentId);
             }
             await this.markdownWriter.deleteNote(noteId);
             delete syncMetadata.lastSyncMeta[noteId];
@@ -442,17 +465,83 @@ export class SyncManager {
   /**
    * 检测关键配置是否变化（organizeByTag / inlineAnnotations / vaultFolderPath / tagFolderRoot）
    * 变化时需要全量重同步，否则旧笔记会留在旧目录结构里
+   *
+   * @returns 变化详情：changed 表示是否有变化，changes 列出具体变化项
    */
-  private checkSettingsChanged(metadata: SyncMetadata): boolean {
+  private checkSettingsChanged(metadata: SyncMetadata): {
+    changed: boolean;
+    changes: string[];
+  } {
     const last = metadata.lastSettings;
-    if (!last) return false; // 首次同步或旧版本元数据，不算变化
+    // 首次同步或旧版本元数据（lastSettings 为空对象），不算变化
+    if (!last || Object.keys(last).length === 0) {
+      return { changed: false, changes: [] };
+    }
 
-    if (last.organizeByTag !== this.settings.organizeByTag) return true;
-    if (last.inlineAnnotations !== this.settings.inlineAnnotations) return true;
-    if (last.vaultFolderPath !== this.settings.vaultFolderPath) return true;
-    if (last.tagFolderRoot !== this.settings.tagFolderRoot) return true;
+    const changes: string[] = [];
+    if (last.organizeByTag !== this.settings.organizeByTag) changes.push("organizeByTag");
+    if (last.inlineAnnotations !== this.settings.inlineAnnotations) changes.push("inlineAnnotations");
+    if (last.vaultFolderPath !== this.settings.vaultFolderPath) changes.push("vaultFolderPath");
+    if (last.tagFolderRoot !== this.settings.tagFolderRoot) changes.push("tagFolderRoot");
 
-    return false;
+    return { changed: changes.length > 0, changes };
+  }
+
+  /**
+   * 清理独立批注文件（inlineAnnotations 从 false 切到 true 时调用）
+   *
+   * 旧的非内联模式下，每条批注是独立的 .md 文件，frontmatter 里有 parent_id 字段。
+   * 切到内联模式后这些文件不再需要（批注内容会内联到父笔记），删除它们避免混淆。
+   */
+  private async cleanupStandaloneAnnotations(): Promise<void> {
+    try {
+      const basePath = this.settings.vaultFolderPath.replace(/^\/+|\/+$/g, "");
+      const deleted = await this.deleteAnnotationsInFolder(basePath);
+      if (deleted > 0) {
+        console.debug(`[SyncManager] 已清理 ${deleted} 个独立批注文件`);
+      }
+    } catch (error) {
+      console.warn("[SyncManager] 清理独立批注文件失败:", error);
+    }
+  }
+
+  /**
+   * 递归扫描文件夹，删除所有带 parent_id frontmatter 的 .md 文件（即批注笔记）
+   * @returns 删除的文件数
+   */
+  private async deleteAnnotationsInFolder(folderPath: string): Promise<number> {
+    const vault = this.app.vault;
+    let deleted = 0;
+
+    try {
+      const entry = vault.getAbstractFileByPath(folderPath);
+      if (!(entry instanceof TFolder)) return 0;
+
+      for (const child of entry.children) {
+        if (child instanceof TFile) {
+          if (!child.path.endsWith(".md")) continue;
+          try {
+            const content = await vault.read(child);
+            // 批注笔记的 frontmatter 里有 parent_id 字段
+            if (/^parent_id:\s*\S+/m.test(content)) {
+              await vault.delete(child);
+              deleted++;
+              console.debug(`[SyncManager] 已删除独立批注: ${child.path}`);
+            }
+          } catch {
+            // 忽略读取错误
+          }
+        } else if (child instanceof TFolder) {
+          // 不递归进 assets 目录（v0.3.1 的图片目录）
+          if (child.name === "assets") continue;
+          deleted += await this.deleteAnnotationsInFolder(child.path);
+        }
+      }
+    } catch {
+      // 忽略
+    }
+
+    return deleted;
   }
 
   /**
@@ -535,26 +624,5 @@ export class SyncManager {
     }
 
     console.debug(`[SyncManager] 笔记下载完成: 成功 ${downloaded}, 失败 ${failed}, 总计 ${total}`);
-  }
-
-  /**
-   * 带重试的异步操作
-   */
-  private async withRetry<T>(
-    fn: () => Promise<T>,
-    maxRetries: number,
-    delay: number = 1000
-  ): Promise<T> {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        return await fn();
-      } catch (error) {
-        if (i === maxRetries - 1) throw error;
-        const waitTime = delay * Math.pow(2, i);
-        console.warn(`[SyncManager] 操作失败，${waitTime}ms 后重试 (${i + 1}/${maxRetries})`);
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
-      }
-    }
-    throw new Error("重试次数耗尽");
   }
 }

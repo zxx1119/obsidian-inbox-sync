@@ -25,8 +25,10 @@ export interface InboxSyncSettings {
 
   // 高级选项
   enableFrontmatterTags: boolean;  // 是否在 frontmatter 中添加标签
-  preserveContentTags: boolean;    // 是否保留内容中的 #tag
-  conflictResolution: "skip" | "overwrite" | "rename";  // 冲突处理策略
+  /** @deprecated 未实现，保留字段兼容旧 data.json。当前行为：永远保留正文标签 */
+  preserveContentTags: boolean;
+  /** @deprecated 未实现，保留字段兼容旧 data.json。当前行为：永远是 overwrite */
+  conflictResolution: "skip" | "overwrite" | "rename";
 
   // 笔记组织方式
   organizeByTag: boolean;          // 是否按主标签分文件夹（无标签笔记留在根目录）

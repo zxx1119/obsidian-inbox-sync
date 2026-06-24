@@ -62,13 +62,8 @@ const t: Translations = {
   advancedTitle: { zh: "高级选项", en: "Advanced Options" },
   frontmatterTags: { zh: "Frontmatter 标签", en: "Frontmatter tags" },
   frontmatterTagsDesc: { zh: "从笔记内容中提取标签并写入 YAML frontmatter", en: "Extract tags from note content and add to YAML frontmatter" },
-  preserveContentTags: { zh: "保留正文标签", en: "Preserve content tags" },
-  preserveContentTagsDesc: { zh: "在笔记正文中保留 #标签（同时也会写入 frontmatter）", en: "Keep #tags in note content (also written to frontmatter)" },
-  conflictResolution: { zh: "冲突处理策略", en: "Conflict resolution" },
-  conflictResolutionDesc: { zh: "遇到 Vault 中已存在的笔记时的处理方式", en: "How to handle notes that already exist in your vault" },
-  conflictSkip: { zh: "跳过（保留已有笔记）", en: "Skip (keep existing)" },
-  conflictOverwrite: { zh: "覆盖（用新笔记替换）", en: "Overwrite (replace with new)" },
-  conflictRename: { zh: "重命名（保留两者）", en: "Rename (keep both)" },
+  // 注：preserveContentTags 和 conflictResolution 配置项已从 UI 移除（代码未实现），
+  // settings 字段保留以兼容旧 data.json，不再暴露给用户。
 
   // 笔记组织
   organizeTitle: { zh: "笔记组织方式", en: "Note Organization" },
@@ -307,32 +302,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName(i18n("preserveContentTags"))
-      .setDesc(i18n("preserveContentTagsDesc"))
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.preserveContentTags)
-          .onChange(async (value) => {
-            this.plugin.settings.preserveContentTags = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(i18n("conflictResolution"))
-      .setDesc(i18n("conflictResolutionDesc"))
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("skip", i18n("conflictSkip"))
-          .addOption("overwrite", i18n("conflictOverwrite"))
-          .addOption("rename", i18n("conflictRename"))
-          .setValue(this.plugin.settings.conflictResolution)
-          .onChange(async (value: "skip" | "overwrite" | "rename") => {
-            this.plugin.settings.conflictResolution = value;
-            await this.plugin.saveSettings();
-          })
-      );
+    // 注：preserveContentTags 和 conflictResolution 选项已移除（代码未实现）
+    // 旧 data.json 里的对应字段保留但不再生效，避免破坏现有配置文件
 
     // ========== 笔记组织方式 ==========
     new Setting(containerEl).setName(i18n("organizeTitle")).setHeading();
