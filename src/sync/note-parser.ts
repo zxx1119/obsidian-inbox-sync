@@ -130,19 +130,14 @@ export class NoteParser {
     if (!extra) return {};
 
     try {
-      // 尝试直接解析
-      return JSON.parse(extra);
-    } catch {
-      // 尝试处理双重编码
-      try {
-        const parsed = JSON.parse(extra);
-        if (typeof parsed === "string") {
-          return JSON.parse(parsed);
-        }
-        return parsed as BlockExtra;
-      } catch {
-        return {};
+      const parsed = JSON.parse(extra);
+      // 双重编码：外层是 JSON 字符串，解析后还是 string，再解析一次
+      if (typeof parsed === "string") {
+        return JSON.parse(parsed);
       }
+      return parsed as BlockExtra;
+    } catch {
+      return {};
     }
   }
 

@@ -1,5 +1,5 @@
 import { CloudClient, CloudFileInfo } from "./cloud-client";
-import { AtomicNote, SyncManifest } from "../types/inbox";
+import { AtomicNote } from "../types/inbox";
 import { App, requestUrl } from "obsidian";
 
 /**
@@ -131,59 +131,6 @@ export class WebDAVNativeClient implements CloudClient {
   }
 
   /**
-   * 下载 SYNC_MANIFEST.json
-   */
-  async downloadManifest(): Promise<SyncManifest | null> {
-    try {
-      const result = await this.webdavRequest("GET", "batch-backup/SYNC_MANIFEST.json");
-
-      if (result.status === 200) {
-        return JSON.parse(result.text) as SyncManifest;
-      }
-
-      console.warn("[WebDAV] SYNC_MANIFEST.json 不存在:", result.status);
-      return null;
-    } catch (error) {
-      console.warn("[WebDAV] SYNC_MANIFEST.json 下载失败:", error);
-      return null;
-    }
-  }
-
-  /**
-   * 下载 ZIP 批量包
-   */
-  async downloadZipBatch(fileName: string): Promise<ArrayBuffer | null> {
-    try {
-      const response = await requestUrl({
-        url: this.getFullUrl(`batch-backup/${fileName}`),
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${btoa(`${this.username}:${this.password}`)}`,
-        },
-      });
-
-      if (response.status === 200 && response.arrayBuffer) {
-        return response.arrayBuffer;
-      }
-
-      // 如果没有 arrayBuffer，尝试从 text 转换
-      if (response.status === 200 && response.text) {
-        const binaryString = atob(response.text);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return bytes.buffer;
-      }
-
-      return null;
-    } catch (error) {
-      console.error(`[WebDAV] 下载 ZIP 失败: ${fileName}`, error);
-      return null;
-    }
-  }
-
-  /**
    * 下载单个原子笔记
    */
   async downloadAtomicNote(path: string): Promise<AtomicNote | null> {
@@ -294,16 +241,6 @@ export class WebDAVNativeClient implements CloudClient {
         return response.arrayBuffer;
       }
 
-      // 如果没有 arrayBuffer，尝试从 text 转换（base64 编码的图片）
-      if (response.status === 200 && response.text) {
-        const binaryString = atob(response.text);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return bytes.buffer;
-      }
-
       return null;
     } catch (error) {
       console.error(`[WebDAV] 下载资源失败: ${remotePath}`, error);
@@ -311,22 +248,4 @@ export class WebDAVNativeClient implements CloudClient {
     }
   }
 
-  /**
-   * 检查资源文件是否存在（本地）
-   * 由 AssetHandler 使用 Obsidian API 实现
-   */
-  assetExistsLocally(_localPath: string): Promise<boolean> {
-    return Promise.resolve(false);
-  }
-
-  /**
-   * 保存资源文件到本地
-   * 由 AssetHandler 使用 Obsidian API 实现
-   */
-  async saveAssetToLocal(
-    _buffer: ArrayBuffer,
-    _localPath: string
-  ): Promise<void> {
-    // 由 AssetHandler 实现
-  }
 }

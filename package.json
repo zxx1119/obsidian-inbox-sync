@@ -1,12 +1,11 @@
 {
   "name": "obsidian-inbox-sync",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Sync notes from inBox app to your Obsidian vault via WebDAV/S3",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "version": "node version-bump.mjs && git add manifest.json versions.json"
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
   },
   "keywords": [
     "obsidian",
@@ -19,7 +18,6 @@
   "author": "gudong",
   "license": "MIT",
   "devDependencies": {
-    "@types/jszip": "^3.4.1",
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.13.0",
     "@typescript-eslint/parser": "^7.13.0",
@@ -34,8 +32,6 @@
     "@aws-sdk/client-s3": "^3.600.0",
     "@smithy/fetch-http-handler": "^5.3.16",
     "@smithy/protocol-http": "^5.3.13",
-    "@smithy/querystring-builder": "^4.2.13",
-    "jszip": "^3.10.1",
-    "webdav": "^5.4.0"
+    "@smithy/querystring-builder": "^4.2.13"
   }
 }

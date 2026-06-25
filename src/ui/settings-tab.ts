@@ -1,93 +1,6 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import InboxSyncPlugin from "../main";
-
-// ========== i18n ==========
-type LangKey = "zh" | "en";
-
-function getLang(): LangKey {
-  // 优先用 navigator.language（Electron 环境），其次 localStorage
-  const lang = (navigator.language
-    || window.localStorage.getItem("language")
-    || "en");
-  return lang.startsWith("zh") ? "zh" : "en";
-}
-
-type Translations = Record<string, { zh: string; en: string }>;
-
-const t: Translations = {
-  // 标题
-  title: { zh: "inBox 同步设置", en: "inBox Sync Settings" },
-  description: {
-    zh: "配置你的 inBox 云存储，将笔记同步到 Obsidian Vault。",
-    en: "Configure your inBox cloud storage to sync notes to your Obsidian vault.",
-  },
-
-  // 存储类型
-  storageType: { zh: "存储类型", en: "Storage type" },
-  storageTypeDesc: { zh: "选择云存储服务", en: "Choose your cloud storage provider" },
-  s3Option: { zh: "S3 兼容存储", en: "S3 compatible" },
-
-  // WebDAV
-  webdavTitle: { zh: "WebDAV 配置", en: "WebDAV Configuration" },
-  webdavUrl: { zh: "服务器地址", en: "Server URL" },
-  webdavUrlDesc: { zh: "WebDAV 服务器地址（如 https://dav.example.com）", en: "WebDAV server URL (e.g., https://dav.example.com)" },
-  webdavUsername: { zh: "用户名", en: "Username" },
-  webdavUsernameDesc: { zh: "WebDAV 登录用户名", en: "WebDAV login username" },
-  webdavPassword: { zh: "授权密码", en: "Authorization password" },
-  webdavPasswordDesc: { zh: "WebDAV 授权密码（第三方应用专用密码）", en: "WebDAV app-specific authorization password" },
-
-  // S3
-  s3Title: { zh: "S3 配置", en: "S3 Configuration" },
-  s3Endpoint: { zh: "Endpoint", en: "Endpoint" },
-  s3EndpointDesc: { zh: "S3 兼容服务的访问地址", en: "S3-compatible service endpoint URL" },
-  s3AccessKey: { zh: "Access Key", en: "Access Key" },
-  s3AccessKeyDesc: { zh: "S3 访问密钥", en: "S3 access key" },
-  s3SecretKey: { zh: "Secret Key", en: "Secret Key" },
-  s3SecretKeyDesc: { zh: "S3 密钥", en: "S3 secret key" },
-  s3Bucket: { zh: "Bucket", en: "Bucket" },
-  s3BucketDesc: { zh: "S3 存储桶名称", en: "S3 bucket name" },
-  s3Region: { zh: "Region", en: "Region" },
-  s3RegionDesc: { zh: "S3 区域（如 cn-beijing）", en: "S3 region (e.g., us-east-1)" },
-
-  // 同步设置
-  syncTitle: { zh: "同步设置", en: "Sync Settings" },
-  vaultFolder: { zh: "本地存储路径", en: "Vault folder path" },
-  vaultFolderDesc: { zh: "笔记在 Vault 中的存储文件夹", en: "The folder in your vault where synced notes will be stored" },
-  autoSync: { zh: "自动同步", en: "Auto sync" },
-  autoSyncDesc: { zh: "定时自动同步笔记", en: "Automatically sync notes at regular intervals" },
-  syncInterval: { zh: "同步间隔（分钟）", en: "Sync interval (minutes)" },
-  syncIntervalDesc: { zh: "自动同步的时间间隔（需开启自动同步）", en: "How often to auto sync (requires auto sync enabled)" },
-
-  // 高级选项
-  advancedTitle: { zh: "高级选项", en: "Advanced Options" },
-  frontmatterTags: { zh: "Frontmatter 标签", en: "Frontmatter tags" },
-  frontmatterTagsDesc: { zh: "从笔记内容中提取标签并写入 YAML frontmatter", en: "Extract tags from note content and add to YAML frontmatter" },
-  // 注：preserveContentTags 和 conflictResolution 配置项已从 UI 移除（代码未实现），
-  // settings 字段保留以兼容旧 data.json，不再暴露给用户。
-
-  // 笔记组织
-  organizeTitle: { zh: "笔记组织方式", en: "Note Organization" },
-  organizeByTag: { zh: "按标签分文件夹", en: "Organize by tag folders" },
-  organizeByTagDesc: { zh: "按主标签（第一个标签）将笔记归到子文件夹，无标签笔记留在根目录。支持嵌套标签（如 #日记/生活 → inBox/日记/生活/）", en: "File notes into tag subfolders by primary tag. Notes without tags stay in the root folder. Supports nested tags (e.g. #diary/life → inBox/diary/life/)" },
-  tagFolderRoot: { zh: "标签目录根", en: "Tag folder root" },
-  tagFolderRootDesc: { zh: "标签子文件夹的父目录名（留空则直接在存储路径下建标签目录）", en: "Parent folder for tag subfolders (leave empty to create tag folders directly under the storage path)" },
-  inlineAnnotations: { zh: "批注内联到父笔记", en: "Inline annotations to parent" },
-  inlineAnnotationsDesc: { zh: "把批注内容直接拼到父笔记末尾，不再为每条批注生成独立文件。父笔记成为完整的可对照阅读文档", en: "Append annotation content directly to the parent note instead of creating separate files per annotation. The parent note becomes a complete, readable document" },
-
-  // 测试连接
-  testConnection: { zh: "测试连接", en: "Test connection" },
-  testConnectionDesc: { zh: "验证云存储配置是否正确", en: "Verify your cloud storage credentials" },
-  testing: { zh: "测试中...", en: "Testing..." },
-  connectionSuccess: { zh: "✓ 连接成功！配置正确。", en: "✓ Connection successful! Settings are correct." },
-  connectionFailed: { zh: "✗ 连接失败：", en: "✗ Connection failed: " },
-  noticeSuccess: { zh: "inBox Sync: 连接成功！", en: "inBox Sync: Connection successful!" },
-  noticeFailed: { zh: "inBox Sync: 连接失败 - ", en: "inBox Sync: Connection failed - " },
-};
-
-function i18n(key: string): string {
-  const lang = getLang();
-  return t[key]?.[lang] ?? t[key]?.["en"] ?? key;
-}
+import { uiT } from "../i18n";
 
 /**
  * 插件设置页面
@@ -106,17 +19,17 @@ export class InboxSyncSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     // 标题和说明
-    new Setting(containerEl).setName(i18n("title")).setHeading();
-    containerEl.createEl("p", { text: i18n("description") });
+    new Setting(containerEl).setName(uiT("title")).setHeading();
+    containerEl.createEl("p", { text: uiT("description") });
 
     // ========== 云存储配置 ==========
     new Setting(containerEl)
-      .setName(i18n("storageType"))
-      .setDesc(i18n("storageTypeDesc"))
+      .setName(uiT("storageType"))
+      .setDesc(uiT("storageTypeDesc"))
       .addDropdown((dropdown) =>
         dropdown
           .addOption("webdav", "WebDAV")
-          .addOption("s3", i18n("s3Option"))
+          .addOption("s3", uiT("s3Option"))
           .setValue(this.plugin.settings.storageType)
           .onChange(async (value: "webdav" | "s3") => {
             this.plugin.settings.storageType = value;
@@ -127,11 +40,11 @@ export class InboxSyncSettingTab extends PluginSettingTab {
 
     // ========== WebDAV 配置 ==========
     if (this.plugin.settings.storageType === "webdav") {
-      new Setting(containerEl).setName(i18n("webdavTitle")).setHeading();
+      new Setting(containerEl).setName(uiT("webdavTitle")).setHeading();
 
       new Setting(containerEl)
-        .setName(i18n("webdavUrl"))
-        .setDesc(i18n("webdavUrlDesc"))
+        .setName(uiT("webdavUrl"))
+        .setDesc(uiT("webdavUrlDesc"))
         .addText((text) =>
           text
             .setPlaceholder("https://dav.example.com")
@@ -143,8 +56,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName(i18n("webdavUsername"))
-        .setDesc(i18n("webdavUsernameDesc"))
+        .setName(uiT("webdavUsername"))
+        .setDesc(uiT("webdavUsernameDesc"))
         .addText((text) =>
           text
             .setPlaceholder("username")
@@ -156,8 +69,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName(i18n("webdavPassword"))
-        .setDesc(i18n("webdavPasswordDesc"))
+        .setName(uiT("webdavPassword"))
+        .setDesc(uiT("webdavPasswordDesc"))
         .addText((text) => {
           text.inputEl.type = "password";
           text
@@ -174,11 +87,11 @@ export class InboxSyncSettingTab extends PluginSettingTab {
 
     // ========== S3 配置 ==========
     if (this.plugin.settings.storageType === "s3") {
-      new Setting(containerEl).setName(i18n("s3Title")).setHeading();
+      new Setting(containerEl).setName(uiT("s3Title")).setHeading();
 
       new Setting(containerEl)
-        .setName(i18n("s3Endpoint"))
-        .setDesc(i18n("s3EndpointDesc"))
+        .setName(uiT("s3Endpoint"))
+        .setDesc(uiT("s3EndpointDesc"))
         .addText((text) =>
           text
             .setPlaceholder("https://s3.example.com")
@@ -190,8 +103,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName(i18n("s3AccessKey"))
-        .setDesc(i18n("s3AccessKeyDesc"))
+        .setName(uiT("s3AccessKey"))
+        .setDesc(uiT("s3AccessKeyDesc"))
         .addText((text) =>
           text
             .setPlaceholder("access-key")
@@ -203,8 +116,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName(i18n("s3SecretKey"))
-        .setDesc(i18n("s3SecretKeyDesc"))
+        .setName(uiT("s3SecretKey"))
+        .setDesc(uiT("s3SecretKeyDesc"))
         .addText((text) => {
           text.inputEl.type = "password";
           text
@@ -217,8 +130,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
         });
 
       new Setting(containerEl)
-        .setName(i18n("s3Bucket"))
-        .setDesc(i18n("s3BucketDesc"))
+        .setName(uiT("s3Bucket"))
+        .setDesc(uiT("s3BucketDesc"))
         .addText((text) =>
           text
             .setPlaceholder("my-bucket")
@@ -230,8 +143,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName(i18n("s3Region"))
-        .setDesc(i18n("s3RegionDesc"))
+        .setName(uiT("s3Region"))
+        .setDesc(uiT("s3RegionDesc"))
         .addText((text) =>
           text
             .setPlaceholder("us-east-1")
@@ -246,11 +159,11 @@ export class InboxSyncSettingTab extends PluginSettingTab {
     }
 
     // ========== 同步设置 ==========
-    new Setting(containerEl).setName(i18n("syncTitle")).setHeading();
+    new Setting(containerEl).setName(uiT("syncTitle")).setHeading();
 
     new Setting(containerEl)
-      .setName(i18n("vaultFolder"))
-      .setDesc(i18n("vaultFolderDesc"))
+      .setName(uiT("vaultFolder"))
+      .setDesc(uiT("vaultFolderDesc"))
       .addText((text) =>
         text
           .setPlaceholder("inBox")
@@ -262,8 +175,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(i18n("autoSync"))
-      .setDesc(i18n("autoSyncDesc"))
+      .setName(uiT("autoSync"))
+      .setDesc(uiT("autoSyncDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.enableAutoSync)
@@ -274,8 +187,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(i18n("syncInterval"))
-      .setDesc(i18n("syncIntervalDesc"))
+      .setName(uiT("syncInterval"))
+      .setDesc(uiT("syncIntervalDesc"))
       .addSlider((slider) =>
         slider
           .setLimits(5, 120, 5)
@@ -288,11 +201,11 @@ export class InboxSyncSettingTab extends PluginSettingTab {
       );
 
     // ========== 高级选项 ==========
-    new Setting(containerEl).setName(i18n("advancedTitle")).setHeading();
+    new Setting(containerEl).setName(uiT("advancedTitle")).setHeading();
 
     new Setting(containerEl)
-      .setName(i18n("frontmatterTags"))
-      .setDesc(i18n("frontmatterTagsDesc"))
+      .setName(uiT("frontmatterTags"))
+      .setDesc(uiT("frontmatterTagsDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.enableFrontmatterTags)
@@ -306,11 +219,11 @@ export class InboxSyncSettingTab extends PluginSettingTab {
     // 旧 data.json 里的对应字段保留但不再生效，避免破坏现有配置文件
 
     // ========== 笔记组织方式 ==========
-    new Setting(containerEl).setName(i18n("organizeTitle")).setHeading();
+    new Setting(containerEl).setName(uiT("organizeTitle")).setHeading();
 
     new Setting(containerEl)
-      .setName(i18n("organizeByTag"))
-      .setDesc(i18n("organizeByTagDesc"))
+      .setName(uiT("organizeByTag"))
+      .setDesc(uiT("organizeByTagDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.organizeByTag)
@@ -321,8 +234,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(i18n("tagFolderRoot"))
-      .setDesc(i18n("tagFolderRootDesc"))
+      .setName(uiT("tagFolderRoot"))
+      .setDesc(uiT("tagFolderRootDesc"))
       .addText((text) =>
         text
           .setPlaceholder("")
@@ -334,8 +247,8 @@ export class InboxSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(i18n("inlineAnnotations"))
-      .setDesc(i18n("inlineAnnotationsDesc"))
+      .setName(uiT("inlineAnnotations"))
+      .setDesc(uiT("inlineAnnotationsDesc"))
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.inlineAnnotations)
@@ -355,42 +268,42 @@ export class InboxSyncSettingTab extends PluginSettingTab {
     });
 
     new Setting(containerEl)
-      .setName(i18n("testConnection"))
-      .setDesc(i18n("testConnectionDesc"))
+      .setName(uiT("testConnection"))
+      .setDesc(uiT("testConnectionDesc"))
       .addButton((button) =>
         button
-          .setButtonText(i18n("testConnection"))
+          .setButtonText(uiT("testConnection"))
           .setDisabled(this.testingConnection)
           .onClick(async () => {
             if (this.testingConnection) return;
 
             this.testingConnection = true;
-            button.setButtonText(i18n("testing"));
+            button.setButtonText(uiT("testing"));
             button.setDisabled(true);
             statusEl.textContent = "";
             statusEl.className = "inbox-connection-status";
 
             try {
-              this.plugin.syncManager.updateSettings(this.plugin.settings);
+              this.plugin.syncManager.flushSettings();
               const result = await this.plugin.syncManager.testConnection();
 
               if (result.success) {
-                statusEl.textContent = i18n("connectionSuccess");
+                statusEl.textContent = uiT("connectionSuccess");
                 statusEl.className = "inbox-connection-status inbox-status-success";
-                new Notice(i18n("noticeSuccess"));
+                new Notice(uiT("noticeSuccess"));
               } else {
-                statusEl.textContent = i18n("connectionFailed") + result.error;
+                statusEl.textContent = uiT("connectionFailed") + result.error;
                 statusEl.className = "inbox-connection-status inbox-status-error";
-                new Notice(i18n("noticeFailed") + result.error);
+                new Notice(uiT("noticeFailed") + result.error);
               }
             } catch (error) {
               const errorMsg = error instanceof Error ? error.message : String(error);
-              statusEl.textContent = i18n("connectionFailed") + errorMsg;
+              statusEl.textContent = uiT("connectionFailed") + errorMsg;
               statusEl.className = "inbox-connection-status inbox-status-error";
-              new Notice(i18n("noticeFailed") + errorMsg);
+              new Notice(uiT("noticeFailed") + errorMsg);
             } finally {
               this.testingConnection = false;
-              button.setButtonText(i18n("testConnection"));
+              button.setButtonText(uiT("testConnection"));
               button.setDisabled(false);
             }
           })

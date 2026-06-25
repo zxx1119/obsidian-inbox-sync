@@ -2,6 +2,7 @@ import { Plugin, Notice } from "obsidian";
 import { InboxSyncSettings, DEFAULT_SETTINGS } from "./types/settings";
 import { SyncManager } from "./sync/sync-manager";
 import { InboxSyncSettingTab } from "./ui/settings-tab";
+import { t } from "./i18n";
 
 /**
  * 同步状态枚举
@@ -19,6 +20,8 @@ export default class InboxSyncPlugin extends Plugin {
   private syncIntervalId: number | null = null;
   private syncStatus: SyncStatus = SyncStatus.IDLE;
   private ribbonIcon: HTMLElement | null = null;
+  private ribbonTimers: number[] = [];
+  private autoSyncGeneration = 0;
 
   async onload() {
     console.debug("Loading inBox Sync plugin");
@@ -31,7 +34,7 @@ export default class InboxSyncPlugin extends Plugin {
       this.syncManager = new SyncManager(this.app, this.settings);
     } catch (error) {
       console.error("[inBox Sync] SyncManager 初始化失败:", error);
-      new Notice(`inBox Sync 初始化失败: ${error instanceof Error ? error.message : String(error)}`);
+      new Notice(t("initFailed", error instanceof Error ? error.message : String(error)));
     }
 
     // 添加同步命令
@@ -61,6 +64,11 @@ export default class InboxSyncPlugin extends Plugin {
   onunload() {
     console.debug("Unloading inBox Sync plugin");
     this.stopAutoSync();
+    this.syncManager?.abort();
+    for (const id of this.ribbonTimers) {
+      clearTimeout(id);
+    }
+    this.ribbonTimers = [];
   }
 
   async loadSettings() {
@@ -92,13 +100,13 @@ export default class InboxSyncPlugin extends Plugin {
 
     // 防止重复点击
     if (this.syncStatus === SyncStatus.SYNCING) {
-      new Notice("Sync is already in progress...");
+      new Notice(t("syncInProgress"));
       return;
     }
 
     // 更新为同步中状态
     this.updateRibbonIconStatus(SyncStatus.SYNCING);
-    const notice = new Notice("Starting sync from inBox...", 0);
+    const notice = new Notice(t("syncStarting"), 0);
 
     // 通知回调函数
     const notify = (message: string) => {
@@ -113,29 +121,29 @@ export default class InboxSyncPlugin extends Plugin {
       // 显示结果
       if (stats.failedNotes === 0 && stats.failedAssets === 0) {
         new Notice(
-          `Sync complete: ${stats.newNotes} new, ${stats.updatedNotes} updated, ${stats.downloadedAssets} assets downloaded`,
+          t("syncComplete", stats.newNotes, stats.updatedNotes, stats.downloadedAssets),
           5000
         );
         this.updateRibbonIconStatus(SyncStatus.SUCCESS);
         // 3秒后恢复空闲状态
-        setTimeout(() => this.updateRibbonIconStatus(SyncStatus.IDLE), 3000);
+        this.ribbonTimers.push(window.setTimeout(() => this.updateRibbonIconStatus(SyncStatus.IDLE), 3000));
       } else {
         new Notice(
-          `Sync finished with errors: ${stats.failedNotes} notes, ${stats.failedAssets} assets failed`,
+          t("syncWithErrors", stats.failedNotes, stats.failedAssets),
           10000
         );
         console.error("Sync errors:", stats.errors);
         this.updateRibbonIconStatus(SyncStatus.ERROR);
         // 5秒后恢复空闲状态
-        setTimeout(() => this.updateRibbonIconStatus(SyncStatus.IDLE), 5000);
+        this.ribbonTimers.push(window.setTimeout(() => this.updateRibbonIconStatus(SyncStatus.IDLE), 5000));
       }
     } catch (error) {
       notice.hide();
-      new Notice(`Sync failed: ${error.message}`, 10000);
+      new Notice(t("syncFailed", error instanceof Error ? error.message : String(error)), 10000);
       console.error("Sync error:", error);
       this.updateRibbonIconStatus(SyncStatus.ERROR);
       // 5秒后恢复空闲状态
-      setTimeout(() => this.updateRibbonIconStatus(SyncStatus.IDLE), 5000);
+      this.ribbonTimers.push(window.setTimeout(() => this.updateRibbonIconStatus(SyncStatus.IDLE), 5000));
     }
   }
 
@@ -173,8 +181,12 @@ export default class InboxSyncPlugin extends Plugin {
   private startAutoSync() {
     this.stopAutoSync();
 
+    const generation = ++this.autoSyncGeneration;
     const intervalMs = this.settings.syncInterval * 60 * 1000;
     this.syncIntervalId = window.setTimeout(() => {
+      // 如果 startAutoSync 被再次调用（如 saveSettings），generation 已递增，
+      // 旧的回调发现 generation 不匹配就放弃，避免产生两条定时器链
+      if (generation !== this.autoSyncGeneration) return;
       void this.syncNow();
       this.startAutoSync(); // 重新设置定时器
     }, intervalMs);
@@ -196,18 +208,18 @@ export default class InboxSyncPlugin extends Plugin {
   private validateSettings(): boolean {
     if (this.settings.storageType === "webdav") {
       if (!this.settings.webdavUrl || !this.settings.webdavUsername || !this.settings.webdavPassword) {
-        new Notice("Please complete WebDAV configuration in settings");
+        new Notice(t("configWebdav"));
         return false;
       }
     } else if (this.settings.storageType === "s3") {
       if (!this.settings.s3Endpoint || !this.settings.s3AccessKey || !this.settings.s3SecretKey || !this.settings.s3Bucket) {
-        new Notice("Please complete S3 configuration in settings");
+        new Notice(t("configS3"));
         return false;
       }
     }
 
     if (!this.settings.vaultFolderPath) {
-      new Notice("Please set the vault folder path in settings");
+      new Notice(t("configVaultPath"));
       return false;
     }
 

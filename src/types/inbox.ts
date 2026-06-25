@@ -165,17 +165,6 @@ export interface ParsedAsset {
 }
 
 /**
- * 云端笔记条目（用于列表展示）
- */
-export interface CloudNoteEntry {
-  id: string;               // noteId
-  etag?: string;
-  mtime?: number;           // 毫秒时间戳
-  size?: number;
-  title?: string;
-}
-
-/**
  * 单条笔记的同步元数据
  */
 export interface NoteSyncMeta {
@@ -248,29 +237,6 @@ export function getResourceType(mimeType: string | undefined, resourceType?: str
   if (mimeType.startsWith("video/")) return ResourceType.VIDEO;
   if (mimeType.startsWith("audio/")) return ResourceType.AUDIO;
   return ResourceType.ATTACHMENT;
-}
-
-/**
- * 日期工具函数
- */
-export function formatDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-export function formatMonth(timestamp: number): string {
-  const date = new Date(timestamp);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
-}
-
-export function formatDateTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toISOString();
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   ParsedNote,
 } from "../types/inbox";
 import { MetadataStorage } from "../storage/metadata-storage";
+import { t } from "../i18n";
 
 /**
  * 同步管理器 - 协调整个同步流程
@@ -31,6 +32,7 @@ export class SyncManager {
   private assetHandler: AssetHandler;
   private metadataStorage: MetadataStorage;
   private abortController: AbortController | null = null;
+  private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(app: App, settings: InboxSyncSettings) {
     this.app = app;
@@ -68,12 +70,12 @@ export class SyncManager {
     } else {
       // 防御：storageType 异常（比如 data.json 被手动改坏）时，避免 cloudClient 为 undefined
       // 后续被传给 AssetHandler 埋雷。抛出明确错误，让上层捕获提示用户。
-      throw new Error(`不支持的存储类型: ${this.settings.storageType}（请检查插件配置）`);
+      throw new Error(t("unsupportedStorage", this.settings.storageType));
     }
 
     // 二次防御：确保 client 已初始化
     if (!this.cloudClient) {
-      throw new Error("云存储客户端初始化失败");
+      throw new Error(t("clientInitFailed"));
     }
   }
 
@@ -81,12 +83,37 @@ export class SyncManager {
     return this.cloudClient.testConnection();
   }
 
+  /**
+   * 更新设置（500ms 防抖）
+   * settings 引用立即更新（保证 sync/testConnection 读到最新值），
+   * 昂贵的组件重建延迟 500ms，避免用户连续输入时反复重建。
+   */
   updateSettings(settings: InboxSyncSettings) {
     this.settings = settings;
+    if (this.rebuildTimer !== null) {
+      clearTimeout(this.rebuildTimer);
+    }
+    this.rebuildTimer = setTimeout(() => {
+      this.rebuildTimer = null;
+      this.initializeClients();
+      this.markdownWriter = new MarkdownWriter(this.app, this.settings);
+      this.assetHandler = new AssetHandler(this.app, this.settings, this.cloudClient);
+      this.metadataStorage = new MetadataStorage(this.app, this.settings);
+    }, 500);
+  }
+
+  /**
+   * 立即重建组件（用于 testConnection 等需要即时生效的场景）
+   */
+  flushSettings(): void {
+    if (this.rebuildTimer !== null) {
+      clearTimeout(this.rebuildTimer);
+      this.rebuildTimer = null;
+    }
     this.initializeClients();
-    this.markdownWriter = new MarkdownWriter(this.app, settings);
-    this.assetHandler = new AssetHandler(this.app, settings, this.cloudClient);
-    this.metadataStorage = new MetadataStorage(this.app, settings);
+    this.markdownWriter = new MarkdownWriter(this.app, this.settings);
+    this.assetHandler = new AssetHandler(this.app, this.settings, this.cloudClient);
+    this.metadataStorage = new MetadataStorage(this.app, this.settings);
   }
 
   abort() {
@@ -120,19 +147,25 @@ export class SyncManager {
     };
 
     try {
-      notify?.("开始同步...");
+      notify?.(t("syncBegin"));
       console.debug("[SyncManager] ===== 开始增量同步 =====");
+
+      // 重置资源处理记录，避免上次同步处理过的资源被跳过
+      this.assetHandler.resetProcessedAssets();
 
       // 1. 读取本地同步元数据
       const syncMetadata = await this.metadataStorage.load();
       console.debug(`[SyncManager] 本地元数据加载完成, 已有 ${Object.keys(syncMetadata.lastSyncMeta).length} 条记录`);
+
+      // 构建笔记索引（一次扫描 vault，后续 delete/find 直接查 map）
+      await this.markdownWriter.buildNoteIndex();
 
       // 1.5 检测关键配置变化：organizeByTag / inlineAnnotations / vaultFolderPath / tagFolderRoot
       // 任一变化都触发全量重同步（清空 lastSyncMeta），否则旧笔记会留在旧目录结构里
       const settingsChange = this.checkSettingsChanged(syncMetadata);
       if (settingsChange.changed) {
         console.debug(`[SyncManager] 关键配置已变化 [${settingsChange.changes.join(", ")}]，触发全量重同步`);
-        notify?.("检测到笔记组织配置变化，执行全量重同步...");
+        notify?.(t("settingsChanged"));
 
         // inlineAnnotations 切换时，清理旧模式的产物：
         // - false→true：旧模式生成了独立批注 .md 文件，需要删除（它们有 parent_id frontmatter）
@@ -142,7 +175,7 @@ export class SyncManager {
           const oldInline = syncMetadata.lastSettings?.inlineAnnotations ?? false;
           if (oldInline === false) {
             // false → true：清理独立批注文件
-            notify?.("清理旧的独立批注文件...");
+            notify?.(t("cleanupAnnotations"));
             await this.cleanupStandaloneAnnotations();
           }
         }
@@ -152,7 +185,7 @@ export class SyncManager {
       }
 
       // 2. 列出云端所有文件元数据（快速，只拿 ETag/MTime，不下载内容）
-      notify?.("扫描云端文件列表...");
+      notify?.(t("scanCloud"));
       const cloudFiles = await this.cloudClient.listNotes();
       console.debug(`[SyncManager] 云端文件列表获取完成, 共 ${cloudFiles.length} 个文件`);
 
@@ -165,9 +198,9 @@ export class SyncManager {
       // 父笔记需要后续强制刷新，否则内联批注区会残留已删除的批注内容
       const parentIdsToRefresh = new Set<string>();
       if (toDelete.length > 0) {
-        notify?.(`处理云端删除 (${toDelete.length} 条)...`);
+        notify?.(t("processDeletes", toDelete.length));
         for (const noteId of toDelete) {
-          if (signal.aborted) throw new Error("同步已取消");
+          if (signal.aborted) throw new Error(t("syncCancelledThrow"));
           try {
             // 删除前先查这条笔记的 parent（如果是批注，需要刷新父笔记）
             const parentId = await this.markdownWriter.findNoteParentId(noteId);
@@ -189,7 +222,7 @@ export class SyncManager {
       const allNotes = new Map<string, AtomicNote>();
 
       if (toDownload.length > 0) {
-        notify?.(`下载变化的笔记 (${toDownload.length} 条)...`);
+        notify?.(t("downloadNotes", toDownload.length));
         await this.downloadChangedNotes(toDownload, allNotes, signal, notify);
       }
 
@@ -205,10 +238,10 @@ export class SyncManager {
       const blockIdNoteIdMap = new Map<number, string>();
 
       for (const [noteId, atomicNote] of allNotes) {
-        if (signal.aborted) throw new Error("同步已取消");
+        if (signal.aborted) throw new Error(t("syncCancelledThrow"));
 
         try {
-          notify?.(`解析笔记 ${++processedCount}/${allNotes.size}...`);
+          notify?.(t("parseNote", ++processedCount, allNotes.size));
 
           const parsedNote = this.noteParser.parse(atomicNote);
 
@@ -236,7 +269,7 @@ export class SyncManager {
           }
         } catch (error: unknown) {
           stats.failedNotes++;
-          const errorMsg = `解析笔记 ${noteId} 失败: ${error instanceof Error ? error.message : String(error)}`;
+          const errorMsg = t("parseNoteFailed", noteId, error instanceof Error ? error.message : String(error));
           stats.errors.push(errorMsg);
           console.error(errorMsg);
         }
@@ -269,7 +302,7 @@ export class SyncManager {
           cloudFileMap.set(cf.id, cf);
         }
         for (const parentId of missingParentIds) {
-          if (signal.aborted) throw new Error("同步已取消");
+          if (signal.aborted) throw new Error(t("syncCancelledThrow"));
           const cloudFile = cloudFileMap.get(parentId);
           if (!cloudFile) {
             // 父笔记在云端也不存在了（可能也被删除了），跳过
@@ -303,10 +336,10 @@ export class SyncManager {
 
       let writeIndex = 0;
       for (const [noteId, parsedNote] of parsedNoteMap) {
-        if (signal.aborted) throw new Error("同步已取消");
+        if (signal.aborted) throw new Error(t("syncCancelledThrow"));
 
         try {
-          notify?.(`写入笔记 ${++writeIndex}/${parsedNoteMap.size}...`);
+          notify?.(t("writeNote", ++writeIndex, parsedNoteMap.size));
 
           // 内联模式：跳过批注笔记（它们会被拼进父笔记）
           // 资源不在跳过时处理，而是在父笔记写入后统一处理，避免重复统计
@@ -328,7 +361,7 @@ export class SyncManager {
           noteIdFileMap.set(noteId, { fileName: result.fileName, filePath: result.filePath });
 
           // 处理资源（v0.3.0：传入笔记 filePath，资源下载到笔记同目录的 assets 子文件夹）
-          const assetStats = await this.assetHandler.handleAssets(parsedNote, result.filePath);
+          const assetStats = await this.assetHandler.handleAssets(parsedNote);
           if (result.isNew) {
             stats.newNotes++;
           } else {
@@ -343,7 +376,7 @@ export class SyncManager {
           // 批注资源跟父笔记走（放父笔记的 assets 文件夹）
           if (inlineMode && annotations) {
             for (const ann of annotations) {
-              const annAssetStats = await this.assetHandler.handleAssets(ann, result.filePath);
+              const annAssetStats = await this.assetHandler.handleAssets(ann);
               stats.totalAssets += annAssetStats.total;
               stats.downloadedAssets += annAssetStats.downloaded;
               stats.skippedAssets += annAssetStats.skipped;
@@ -352,7 +385,7 @@ export class SyncManager {
           }
         } catch (error: unknown) {
           stats.failedNotes++;
-          const errorMsg = `写入笔记 ${noteId} 失败: ${error instanceof Error ? error.message : String(error)}`;
+          const errorMsg = t("writeNoteFailed", noteId, error instanceof Error ? error.message : String(error));
           stats.errors.push(errorMsg);
           console.error(errorMsg);
         }
@@ -443,22 +476,23 @@ export class SyncManager {
       const efficiency = cloudFiles.length > 0
         ? ((unchanged / cloudFiles.length) * 100).toFixed(1)
         : "0";
-      notify?.(`同步完成！新增 ${stats.newNotes}, 更新 ${stats.updatedNotes}, 删除 ${stats.deletedNotes}, 跳过 ${unchanged} (${elapsed}s)`);
+      notify?.(t("syncDone", stats.newNotes, stats.updatedNotes, stats.deletedNotes, unchanged, elapsed));
       console.debug(`[SyncManager] ===== 同步完成 (${elapsed}s) =====`);
       console.debug(`[SyncManager] 增量效率: 跳过 ${unchanged}/${cloudFiles.length} (${efficiency}%)`);
       console.debug(`[SyncManager] 新增: ${stats.newNotes}, 更新: ${stats.updatedNotes}, 删除: ${stats.deletedNotes}, 失败: ${stats.failedNotes}`);
     } catch (error: unknown) {
       if (signal.aborted) {
-        notify?.("同步已取消");
+        notify?.(t("syncCancelled"));
         console.debug("[SyncManager] 同步已取消");
       } else {
-        stats.errors.push(`同步错误: ${error instanceof Error ? error.message : String(error)}`);
+        stats.errors.push(t("syncError", error instanceof Error ? error.message : String(error)));
         console.error("[SyncManager] 同步错误:", error);
       }
     }
 
     stats.endTime = Date.now();
     this.abortController = null;
+    this.markdownWriter.clearNoteIndex();
     return stats;
   }
 
@@ -599,7 +633,7 @@ export class SyncManager {
     const logInterval = Math.max(10, Math.floor(total / 10));
 
     for (let i = 0; i < files.length; i++) {
-      if (signal.aborted) throw new Error("同步已取消");
+      if (signal.aborted) throw new Error(t("syncCancelledThrow"));
 
       const file = files[i];
       try {
@@ -617,9 +651,8 @@ export class SyncManager {
 
       const processed = downloaded + failed;
       if (processed % logInterval === 0 || processed === total) {
-        const msg = `下载笔记 ${processed}/${total} (成功: ${downloaded}, 失败: ${failed})`;
-        console.debug(`[SyncManager] ${msg}`);
-        notify?.(msg);
+        console.debug(`[SyncManager] 下载笔记 ${processed}/${total} (成功: ${downloaded}, 失败: ${failed})`);
+        notify?.(t("downloadBatch", processed, total, downloaded, failed));
       }
     }
 

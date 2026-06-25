@@ -26,10 +26,59 @@ export interface WriteNoteResult {
 export class MarkdownWriter {
   private app: App;
   private settings: InboxSyncSettings;
+  private noteIndex: Map<string, TFile> | null = null;
 
   constructor(app: App, settings: InboxSyncSettings) {
     this.app = app;
     this.settings = settings;
+  }
+
+  /**
+   * 构建笔记索引（noteId → TFile），一次扫描整个 vault，
+   * 后续 deleteNote / findNotePath / findNoteParentId 直接查 map，
+   * 避免每次操作都递归遍历所有文件。
+   * 每次 sync 开始时调用一次，sync 结束后调用 clearNoteIndex() 释放。
+   */
+  async buildNoteIndex(): Promise<void> {
+    this.noteIndex = new Map();
+    const basePath = this.getBasePath();
+    await this.scanFolderForIndex(basePath);
+  }
+
+  /**
+   * 清除笔记索引，释放内存
+   */
+  clearNoteIndex(): void {
+    this.noteIndex = null;
+  }
+
+  private async scanFolderForIndex(folderPath: string): Promise<void> {
+    const vault = this.app.vault;
+    try {
+      const entry = vault.getAbstractFileByPath(folderPath);
+      if (!(entry instanceof TFolder)) return;
+
+      for (const child of entry.children) {
+        if (child instanceof TFile) {
+          if (!child.path.endsWith(".md")) continue;
+          // 跳过 assets 目录下的文件
+          try {
+            const content = await vault.read(child);
+            const match = content.match(/inbox_id:\s*(\S+)/);
+            if (match) {
+              this.noteIndex!.set(match[1], child);
+            }
+          } catch {
+            // 忽略读取错误
+          }
+        } else if (child instanceof TFolder) {
+          if (child.name === "assets") continue;
+          await this.scanFolderForIndex(child.path);
+        }
+      }
+    } catch {
+      // 忽略
+    }
   }
 
   /**
@@ -258,8 +307,7 @@ export class MarkdownWriter {
     if (note.tags.length > 0 && this.settings.enableFrontmatterTags) {
       lines.push("tags:");
       for (const tag of note.tags) {
-        const obsidianTag = this.convertTagToObsidian(tag);
-        lines.push(`  - ${obsidianTag}`);
+        lines.push(`  - ${tag}`);
       }
     }
 
@@ -272,18 +320,18 @@ export class MarkdownWriter {
     lines.push("");
 
     // 正文内容
-    lines.push(this.processContent(note));
+    lines.push(note.content);
 
     // 资源引用区块（图片/视频/音频/附件）
     // 用笔记文件名-assets/文件名 的相对路径，Obsidian 能识别同目录文件
-    const assetBlock = this.buildAssetBlock(note, displayTitle);
+    const assetBlock = this.buildAssetBlock(note);
     if (assetBlock) {
       lines.push(assetBlock);
     }
 
     // 内联批注区块（父笔记）
     if (this.settings.inlineAnnotations && annotations && annotations.length > 0) {
-      lines.push(this.buildAnnotationBlock(annotations, displayTitle));
+      lines.push(this.buildAnnotationBlock(annotations));
     }
 
     return lines.join("\n");
@@ -305,23 +353,17 @@ export class MarkdownWriter {
    * @param annotations 批注列表（内联模式，批注资源也追加）
    * @returns 资源引用区块字符串，无资源则返回空字符串
    */
-  private buildAssetBlock(
-    note: ParsedNote,
-    displayTitle: string,
-    annotations?: ParsedNote[]
-  ): string {
-    // v0.3.1: 所有资源统一进 vault 根的 inBox/assets/
-    void displayTitle;
-    const assetDir = `inBox/assets`;
+  private buildAssetBlock(note: ParsedNote): string {
+    // v0.3.1: 所有资源统一进 vault 根的 assets/ 子目录
+    const basePath = this.settings.vaultFolderPath.replace(/^\/+|\/+$/g, "");
+    const assetDir = `${basePath}/assets`;
 
     const lines: string[] = [];
     let hasAny = false;
 
-    // 收集所有资源：本笔记 + 批注（内联模式下批注资源也跟父笔记走）
+    // 收集所有资源：本笔记的资源
+    // （批注资源由 sync-manager 单独处理，不在此方法中合并）
     const allNotes: ParsedNote[] = [note];
-    if (annotations && annotations.length > 0) {
-      allNotes.push(...annotations);
-    }
 
     for (const n of allNotes) {
       // 图片（v0.3.1: 改成跳转链接，避免直接嵌入挤掉正文）
@@ -382,8 +424,7 @@ export class MarkdownWriter {
    * 改动（v0.3.1）：批注资源也走全局 `inBox/assets` 目录，跟主笔记一致。
    */
   private buildAnnotationBlock(
-    annotations: ParsedNote[],
-    parentDisplayTitle: string
+    annotations: ParsedNote[]
   ): string {
     // 按创建时间升序排列
     const sorted = [...annotations].sort(
@@ -392,9 +433,9 @@ export class MarkdownWriter {
 
     const lines: string[] = [ANNOTATION_BLOCK_START];
 
-    // v0.3.1: 批注资源也走全局 inBox/assets，跟主笔记一致
-    void parentDisplayTitle;
-    const parentAssetDir = `inBox/assets`;
+    // v0.3.1: 批注资源也走全局 assets 目录，跟主笔记一致
+    const basePath = this.settings.vaultFolderPath.replace(/^\/+|\/+$/g, "");
+    const parentAssetDir = `${basePath}/assets`;
 
     for (const ann of sorted) {
       const timeStr = this.formatAnnotationTime(ann.createdAt.getTime());
@@ -465,27 +506,16 @@ export class MarkdownWriter {
   }
 
   /**
-   * 处理内容（暂不修改，保持原始内容）
-   */
-  private processContent(note: ParsedNote): string {
-    return note.content;
-  }
-
-  /**
-   * 转换标签为 Obsidian 格式
-   */
-  private convertTagToObsidian(tag: string): string {
-    return tag;
-  }
-
-  /**
    * 转义 YAML 特殊字符
    */
   private escapeYaml(text: string): string {
     if (!text) return "";
 
-    if (/[:{}\[\],&*#?|<>=!%@`]/.test(text)) {
-      return `"${text.replace(/"/g, '\\"')}"`;
+    // 换行符 / 回车符会破坏 YAML frontmatter 结构，必须转义
+    const escaped = text.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+
+    if (/[:{}\[\],&*#?|<>=!%@`\\]/.test(text) || escaped !== text) {
+      return `"${escaped.replace(/"/g, '\\"')}"`;
     }
 
     return text;
@@ -577,12 +607,31 @@ export class MarkdownWriter {
 
   /**
    * 删除笔记（通过 noteId 查找并删除）
-   * 扫描根目录及所有子目录下的 .md 文件
+   * 优先使用内存索引（buildNoteIndex 后），否则降级为递归扫描
    */
   async deleteNote(noteId: string): Promise<boolean> {
     const vault = this.app.vault;
     const basePath = this.getBasePath();
 
+    // 快速路径：有索引时直接查 map
+    if (this.noteIndex) {
+      const file = this.noteIndex.get(noteId);
+      if (file) {
+        try {
+          await vault.delete(file);
+          this.noteIndex.delete(noteId);
+          console.debug(`[MarkdownWriter] 已删除笔记: ${file.path}`);
+          await this.cleanupEmptyParentDirs(file.path, basePath);
+          return true;
+        } catch (error) {
+          console.warn(`[MarkdownWriter] 删除笔记失败: ${file.path}`, error);
+          return false;
+        }
+      }
+      return false;
+    }
+
+    // 降级：无索引时递归扫描
     try {
       const deleted = await this.deleteNoteInFolder(basePath, noteId);
       if (deleted) return true;
@@ -751,14 +800,20 @@ export class MarkdownWriter {
   }
 
   /**
-   * 通过 noteId 查找笔记的文件路径（递归扫描所有子目录）
+   * 通过 noteId 查找笔记的文件路径
+   * 优先使用内存索引，否则降级为递归扫描
    */
   async findNotePath(noteId: string): Promise<string | null> {
+    // 快速路径：有索引时直接查 map
+    if (this.noteIndex) {
+      const file = this.noteIndex.get(noteId);
+      return file ? file.path : null;
+    }
+
+    // 降级：递归扫描
     const vault = this.app.vault;
     const basePath = this.getBasePath();
-
-    const result = await this.findNotePathInFolder(basePath, noteId);
-    return result;
+    return this.findNotePathInFolder(basePath, noteId);
   }
 
   /**
@@ -853,7 +908,7 @@ export class MarkdownWriter {
       let modified = false;
 
       // 匹配所有 [[...]] 链接（不匹配 ![[...]] 嵌入引用）
-      content = content.replace(/(?<!!)\[\[([^\]]+)\]\]/g, (match, linkTarget: string) => {
+      content = content.replace(/(?<!!)\[\[([^\]]+)\]\]/g, (match: string, linkTarget: string) => {
         let replacement: string | null = null;
 
         if (linkTarget.startsWith("note-")) {

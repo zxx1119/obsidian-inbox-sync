@@ -1,5 +1,5 @@
 import { CloudClient, CloudFileInfo } from "./cloud-client";
-import { AtomicNote, SyncManifest } from "../types/inbox";
+import { AtomicNote } from "../types/inbox";
 import { ObsidianRequestHandler } from "./obsidian-request-handler";
 import type {
   S3Client as S3ClientType,
@@ -200,59 +200,6 @@ export class S3Client implements CloudClient {
   }
 
   /**
-   * 下载 SYNC_MANIFEST.json
-   */
-  async downloadManifest(): Promise<SyncManifest | null> {
-    const manifestKey = this.getObjectKey("batch-backup/SYNC_MANIFEST.json");
-
-    try {
-      const client = await this.getClient();
-      const { GetObjectCommand } = await getAWSSDK();
-
-      const response = await client.send(
-        new GetObjectCommand({
-          Bucket: this.bucket,
-          Key: manifestKey,
-        })
-      );
-
-      // Body 是 ReadableStream，需要转换为字符串
-      const bodyStr = typeof response.Body === "string"
-        ? response.Body
-        : await new Response(response.Body as ReadableStream).text();
-      return JSON.parse(bodyStr) as SyncManifest;
-    } catch (error) {
-      console.warn("[S3] SYNC_MANIFEST.json 不存在:", error);
-      return null;
-    }
-  }
-
-  /**
-   * 下载 ZIP 批量包
-   */
-  async downloadZipBatch(fileName: string): Promise<ArrayBuffer | null> {
-    const zipKey = this.getObjectKey(`batch-backup/${fileName}`);
-
-    try {
-      const client = await this.getClient();
-      const { GetObjectCommand } = await getAWSSDK();
-
-      const response = await client.send(
-        new GetObjectCommand({
-          Bucket: this.bucket,
-          Key: zipKey,
-        })
-      );
-
-      const bytes = await new Response(response.Body as ReadableStream).arrayBuffer();
-      return bytes;
-    } catch (error) {
-      console.error(`[S3] 下载 ZIP 失败: ${fileName}`, error);
-      return null;
-    }
-  }
-
-  /**
    * 下载单个原子笔记
    */
   async downloadAtomicNote(path: string): Promise<AtomicNote | null> {
@@ -410,22 +357,4 @@ export class S3Client implements CloudClient {
     }
   }
 
-  /**
-   * 检查资源文件是否存在（本地）
-   * 由 AssetHandler 使用 Obsidian API 实现
-   */
-  assetExistsLocally(_localPath: string): Promise<boolean> {
-    return Promise.resolve(false);
-  }
-
-  /**
-   * 保存资源文件到本地
-   * 由 AssetHandler 使用 Obsidian API 实现
-   */
-  async saveAssetToLocal(
-    _buffer: ArrayBuffer,
-    _localPath: string
-  ): Promise<void> {
-    // 由 AssetHandler 实现
-  }
 }

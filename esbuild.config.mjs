@@ -37,10 +37,14 @@ const context = await esbuild.context({
   outfile: "main.js",
 });
 
-// 自动复制到 Obsidian vault 插件目录
-const VAULT_PLUGIN_DIR = "/Users/gudong/Nutstore Files/gudong/XBrain/.obsidian/plugins/inbox-sync";
+// 自动复制到 Obsidian vault 插件目录（通过环境变量配置，不设则跳过）
+const VAULT_PLUGIN_DIR = process.env.OBSIDIAN_VAULT_PLUGIN_DIR;
 
 function copyToVault() {
+  if (!VAULT_PLUGIN_DIR) {
+    console.log("ℹ️ 未设置 OBSIDIAN_VAULT_PLUGIN_DIR，跳过复制");
+    return;
+  }
   try {
     cpSync("main.js", `${VAULT_PLUGIN_DIR}/main.js`);
     cpSync("manifest.json", `${VAULT_PLUGIN_DIR}/manifest.json`);

@@ -31,13 +31,12 @@ export class AssetHandler {
   /**
    * 处理笔记的所有资源
    *
-   * 改动（v0.3.1）：资源统一下载到 vault 根的 `inBox/assets/` 目录，
-   * 不再按笔记名建子文件夹。noteFilePath 参数保留是为了不破坏调用方签名。
+   * 改动（v0.3.1）：资源统一下载到 vault 根的 `${vaultFolderPath}/assets/` 目录，
+   * 不再按笔记名建子文件夹。
    *
    * @param note 笔记数据
-   * @param noteFilePath 笔记在 vault 中的完整路径（v0.3.1 起仅用于日志，不参与路径拼接）
    */
-  async handleAssets(note: ParsedNote, noteFilePath: string): Promise<AssetStats> {
+  async handleAssets(note: ParsedNote): Promise<AssetStats> {
     const stats: AssetStats = {
       total: 0,
       downloaded: 0,
@@ -56,7 +55,7 @@ export class AssetHandler {
 
     for (const asset of allAssets) {
       try {
-        const downloaded = await this.downloadAsset(asset, noteFilePath);
+        const downloaded = await this.downloadAsset(asset);
         if (downloaded) {
           stats.downloaded++;
         } else {
@@ -74,11 +73,11 @@ export class AssetHandler {
   /**
    * 下载单个资源文件
    *
-   * 资源存放路径（v0.3.1）：统一存到 vault 根 `inBox/assets/文件名`。
+   * 资源存放路径（v0.3.1）：统一存到 vault 根 `${vaultFolderPath}/assets/文件名`。
    *
    * @returns true 表示新下载，false 表示已存在
    */
-  private async downloadAsset(asset: ParsedAsset, noteFilePath: string): Promise<boolean> {
+  private async downloadAsset(asset: ParsedAsset): Promise<boolean> {
     // 跳过无效资源
     if (!asset.remoteUrl && !asset.remotePath) {
       return false;
@@ -87,7 +86,7 @@ export class AssetHandler {
       return false;
     }
 
-    const localPath = this.getAssetLocalPath(asset, noteFilePath);
+    const localPath = this.getAssetLocalPath(asset);
 
     // 检查是否已处理过（避免重复下载）
     if (this.processedAssets.has(localPath)) {
@@ -120,21 +119,15 @@ export class AssetHandler {
   /**
    * 获取资源在 vault 中的完整路径
    *
-   * 改动（v0.3.1）：所有资源统一存到 vault 根的 `inBox/assets/` 目录，
+   * 所有资源统一存到 vault 根的 `${vaultFolderPath}/assets/` 目录，
    * 而不是每篇笔记一个 `笔记名-assets/` 子文件夹。
-   * 原因：笔记名本身就是一句话，生成 `${noteName}-assets/` 后会跟 .md 文件
-   * 在 Obsidian 文件树里折叠成同一节点，导致用户点不开笔记、只看到图片。
-   * 改成全局 assets 目录后，.md 文件不再被折叠，且跨设备（同 vault）路径稳定。
    *
    * @param asset 资源（localPath 现在只是文件名）
-   * @param noteFilePath 笔记完整路径（含 .md 扩展名，v0.3.1 起不再用于拼接）
    */
-  private getAssetLocalPath(asset: ParsedAsset, noteFilePath: string): string {
-    // v0.3.1: 所有资源统一进 vault 根的 inBox/assets/
-    // noteFilePath 参数保留是为了不破坏调用方签名，但不再使用
-    void noteFilePath;
+  private getAssetLocalPath(asset: ParsedAsset): string {
     const assetFileName = asset.localPath;
-    return `inBox/assets/${assetFileName}`;
+    const basePath = this.settings.vaultFolderPath.replace(/^\/+|\/+$/g, "");
+    return `${basePath}/assets/${assetFileName}`;
   }
 
   /**
